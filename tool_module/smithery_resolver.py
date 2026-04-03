@@ -46,10 +46,10 @@ SMITHERY_API_BASE = "https://api.smithery.ai"
 # qualifiedName format is "namespace/server-name" (no leading @).
 # Add new entries here when new MCP servers are configured.
 SERVER_ID_MAP: Dict[str, str] = {
-    "google-calendar": "cocal/google-calendar-mcp",
-    "brave-search": "brave/brave-search-mcp-server",
+    "google-calendar": "googlecalendar",
+    "brave-search": "brave",
     "filesystem": "modelcontextprotocol/server-filesystem",
-    "outlook": "loopwork-ai/mcp-outlook",
+    "outlook": "outlook",
 }
 
 
