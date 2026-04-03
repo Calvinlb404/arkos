@@ -314,8 +314,8 @@ def test_qualified_name_normalisation():
     resolver = SmitheryResolver()
 
     # ARKOS internal name via SERVER_ID_MAP
-    assert resolver._to_qualified_name("google-calendar") == "cocal/google-calendar-mcp"
-    assert resolver._to_qualified_name("outlook") == "loopwork-ai/mcp-outlook"
+    assert resolver._to_qualified_name("google-calendar") == "googlecalendar"
+    assert resolver._to_qualified_name("outlook") == "outlook"
 
     # npm package name with leading @
     assert resolver._to_qualified_name("@cocal/google-calendar-mcp") == "cocal/google-calendar-mcp"
@@ -362,7 +362,7 @@ def test_clear_cache_forces_refetch():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
+# @pytest.mark.integration
 @pytest.mark.skipif(
     not __import__("os").environ.get("SMITHERY_API_KEY"),
     reason="SMITHERY_API_KEY not set; skipping live integration test",
@@ -375,13 +375,13 @@ def test_integration_google_calendar_live():
         SMITHERY_API_KEY=sk-... pytest tool_module/test_smithery_resolver.py \
             -m integration -v
     """
-    schema = resolve_tool_schema("google-calendar", "list_events")
+    schema = resolve_tool_schema("google-calendar", "GOOGLECALENDAR_EVENTS_LIST")
     assert isinstance(schema, dict)
     assert schema.get("type") == "object"
     assert "properties" in schema
 
 
-@pytest.mark.integration
+# @pytest.mark.integration
 @pytest.mark.skipif(
     not __import__("os").environ.get("SMITHERY_API_KEY"),
     reason="SMITHERY_API_KEY not set; skipping live integration test",
