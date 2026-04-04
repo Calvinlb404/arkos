@@ -21,8 +21,7 @@ from tool_module.smithery_resolver import (
     SmitheryResolver,
     SmitheryResolverError,
     SERVER_ID_MAP,
-    resolve_tool_schema,
-    _get_default_resolver,
+    resolve_tool_schema
 )
 
 
