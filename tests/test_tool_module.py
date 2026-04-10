@@ -1,16 +1,16 @@
 """Tests for tool_module/tool_call.py: AuthRequiredError, MCPServerConfig, MCPClient, MCPToolManager."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from tool_module.tool_call import (
-    AuthRequiredError,
-    MCPServerConfig,
-    MCPClient,
-    MCPToolManager,
-    PER_USER_SERVICES,
-)
+import pytest
 
+from tool_module.tool_call import (
+    PER_USER_SERVICES,
+    AuthRequiredError,
+    MCPClient,
+    MCPServerConfig,
+    MCPToolManager,
+)
 
 # --- AuthRequiredError ---
 
@@ -29,9 +29,7 @@ class TestAuthRequiredError:
         assert "unknown-svc" in err.message
 
     def test_custom_message(self):
-        err = AuthRequiredError(
-            service="google-calendar", user_id="u1", message="Custom error"
-        )
+        err = AuthRequiredError(service="google-calendar", user_id="u1", message="Custom error")
         assert err.message == "Custom error"
 
     def test_to_dict(self):
@@ -107,9 +105,7 @@ class TestMCPClient:
     @pytest.mark.asyncio
     async def test_start_success(self):
         client, transport = self._make_client()
-        transport.send_request.return_value = {
-            "result": {"protocolVersion": "2024-11-05"}
-        }
+        transport.send_request.return_value = {"result": {"protocolVersion": "2024-11-05"}}
 
         await client.start()
         assert client._initialized is True
@@ -130,7 +126,7 @@ class TestMCPClient:
         client, transport = self._make_client()
         transport.connect.side_effect = Exception("connection refused")
 
-        with pytest.raises(Exception):
+        with pytest.raises(RuntimeError):
             await client.start()
         assert client._initialized is False
 
@@ -212,18 +208,14 @@ class TestMCPToolManager:
 
     def test_create_transport_stdio(self):
         mgr = MCPToolManager(config={})
-        transport = mgr._create_transport(
-            {"transport": "stdio", "command": "npx", "args": ["-y", "server"]}
-        )
+        transport = mgr._create_transport({"transport": "stdio", "command": "npx", "args": ["-y", "server"]})
         from tool_module.transports import StdioTransport
 
         assert isinstance(transport, StdioTransport)
 
     def test_create_transport_http(self):
         mgr = MCPToolManager(config={})
-        transport = mgr._create_transport(
-            {"transport": "http", "url": "https://example.com/mcp"}
-        )
+        transport = mgr._create_transport({"transport": "http", "url": "https://example.com/mcp"})
         from tool_module.transports import HTTPTransport
 
         assert isinstance(transport, HTTPTransport)

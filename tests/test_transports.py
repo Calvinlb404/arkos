@@ -1,13 +1,13 @@
 """Tests for transport classes: StdioTransport, HTTPTransport, OAuthManager."""
 
 import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from tool_module.transports.stdio import StdioTransport
-from tool_module.transports.http import HTTPTransport, OAuthManager
-from tool_module.transports.base import MCPTransport
+import pytest
 
+from tool_module.transports.base import MCPTransport
+from tool_module.transports.http import HTTPTransport, OAuthManager
+from tool_module.transports.stdio import StdioTransport
 
 # --- MCPTransport (ABC) ---
 
@@ -45,9 +45,7 @@ class TestStdioTransport:
     async def test_connect_starts_subprocess(self):
         t = StdioTransport(command="echo", args=["hello"])
         mock_proc = MagicMock()
-        with patch(
-            "asyncio.create_subprocess_exec", new_callable=AsyncMock
-        ) as mock_exec:
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
             mock_exec.return_value = mock_proc
             await t.connect()
             assert t.process is mock_proc
@@ -56,13 +54,15 @@ class TestStdioTransport:
     @pytest.mark.asyncio
     async def test_connect_failure_raises(self):
         t = StdioTransport(command="nonexistent", args=[])
-        with patch(
-            "asyncio.create_subprocess_exec",
-            new_callable=AsyncMock,
-            side_effect=FileNotFoundError("not found"),
+        with (
+            patch(
+                "asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+                side_effect=FileNotFoundError("not found"),
+            ),
+            pytest.raises(RuntimeError, match="connection failed"),
         ):
-            with pytest.raises(RuntimeError, match="connection failed"):
-                await t.connect()
+            await t.connect()
 
     @pytest.mark.asyncio
     async def test_send_request_not_connected(self):
@@ -80,9 +80,7 @@ class TestStdioTransport:
         mock_proc.stdin.write = MagicMock()
         mock_proc.stdin.drain = AsyncMock()
         mock_proc.stdout = MagicMock()
-        mock_proc.stdout.readline = AsyncMock(
-            return_value=(json.dumps(response_data) + "\n").encode()
-        )
+        mock_proc.stdout.readline = AsyncMock(return_value=(json.dumps(response_data) + "\n").encode())
         t.process = mock_proc
 
         result = await t.send_request("tools/list", {})
@@ -115,9 +113,7 @@ class TestStdioTransport:
         mock_proc.stdin.write = MagicMock()
         mock_proc.stdin.drain = AsyncMock()
         mock_proc.stdout = MagicMock()
-        mock_proc.stdout.readline = AsyncMock(
-            return_value=(json.dumps(response) + "\n").encode()
-        )
+        mock_proc.stdout.readline = AsyncMock(return_value=(json.dumps(response) + "\n").encode())
         t.process = mock_proc
 
         await t.send_request("method1", {})

@@ -1,11 +1,12 @@
 """Tests for agent_module/agent.py: Agent class."""
 
 import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from agent_module.agent import MAX_ITER, Agent
 from model_module.ArkModelNew import AIMessage, SystemMessage, UserMessage
-from agent_module.agent import Agent, MAX_ITER
 
 
 @pytest.fixture
@@ -98,7 +99,7 @@ class TestCreateNextStateClass:
     def test_model_rejects_invalid_state(self, agent):
         options = [("state_a", "State A"), ("state_b", "State B")]
         model_class = agent.create_next_state_class(options)
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             model_class(next_state="state_c")
 
 
@@ -118,9 +119,7 @@ class TestCreateToolOptionClass:
 
     @pytest.mark.asyncio
     async def test_validates_tool_name(self, agent):
-        agent.tool_manager.list_all_tools = AsyncMock(
-            return_value={"server": {"my_tool": {"name": "my_tool"}}}
-        )
+        agent.tool_manager.list_all_tools = AsyncMock(return_value={"server": {"my_tool": {"name": "my_tool"}}})
 
         model_class = await agent.create_tool_option_class()
         instance = model_class(tool_name="my_tool")
@@ -132,9 +131,7 @@ class TestCallLLM:
     async def test_returns_ai_message(self, agent):
         agent.llm.generate_response = AsyncMock(return_value="hello world")
 
-        result = await agent.call_llm(
-            context=[UserMessage(content="hi")], json_schema=None
-        )
+        result = await agent.call_llm(context=[UserMessage(content="hi")], json_schema=None)
         assert isinstance(result, AIMessage)
         assert result.content == "hello world"
 
@@ -172,9 +169,7 @@ class TestGetContext:
 
     def test_with_long_term(self, agent):
         agent.memory.retrieve_short_memory.return_value = [UserMessage(content="hi")]
-        agent.memory.retrieve_long_memory.return_value = SystemMessage(
-            content="remembered: user likes blue"
-        )
+        agent.memory.retrieve_long_memory.return_value = SystemMessage(content="remembered: user likes blue")
 
         result = agent.get_context(turns=5, include_long_term=True)
         assert len(result) == 2
@@ -191,17 +186,13 @@ class TestGetContext:
 class TestChooseTransition:
     @pytest.mark.asyncio
     async def test_chooses_next_state(self, agent):
-        agent.llm.generate_response = AsyncMock(
-            return_value=json.dumps({"next_state": "tool_use"})
-        )
+        agent.llm.generate_response = AsyncMock(return_value=json.dumps({"next_state": "tool_use"}))
 
         transitions = {
             "tt": ["tool_use", "wait_for_user"],
             "td": ["Use tools", "Wait for input"],
         }
-        result = await agent.choose_transition(
-            transitions, [UserMessage(content="search for something")]
-        )
+        result = await agent.choose_transition(transitions, [UserMessage(content="search for something")])
         assert result == "tool_use"
 
 

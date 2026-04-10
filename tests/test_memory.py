@@ -1,17 +1,16 @@
 """Tests for memory_module/memory.py: serialize, deserialize, and ROLE/CLASS mappings."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from memory_module.memory import CLASS_TO_ROLE, ROLE_TO_CLASS
 from model_module.ArkModelNew import (
-    UserMessage,
     AIMessage,
     SystemMessage,
     ToolMessage,
+    UserMessage,
 )
-
-from memory_module.memory import ROLE_TO_CLASS, CLASS_TO_ROLE
-
 
 # --- Role/Class Mappings ---
 
@@ -124,7 +123,7 @@ class TestSerializeDeserialize:
         ]
         roles = ["user", "assistant", "system", "tool"]
 
-        for msg, role in zip(messages, roles):
+        for msg, role in zip(messages, roles, strict=False):
             json_str = self._serialize(msg)
             restored = self._deserialize(json_str, role)
             assert restored.content == msg.content

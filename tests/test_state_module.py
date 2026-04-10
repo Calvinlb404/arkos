@@ -1,17 +1,17 @@
 """Tests for state module: State, StateUser, StateAI, StateTool, state_registry, StateHandler."""
 
 import json
-import pytest
-import yaml
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from state_module.state import State
-from state_module.state_user import StateUser
-from state_module.state_ai import StateAI, ReasonedOutput
-from state_module.state_tool import StateTool
-from state_module.state_registry import STATE_REGISTRY, register_state
-from model_module.ArkModelNew import AIMessage, SystemMessage
+import pytest
+import yaml
 
+from model_module.ArkModelNew import AIMessage, SystemMessage
+from state_module.state import State
+from state_module.state_ai import ReasonedOutput, StateAI
+from state_module.state_registry import STATE_REGISTRY, register_state
+from state_module.state_tool import StateTool
+from state_module.state_user import StateUser
 
 # --- State base class ---
 
@@ -122,9 +122,7 @@ class TestStateAI:
             final="Here is your answer.",
         )
         mock_agent = MagicMock()
-        mock_agent.call_llm = AsyncMock(
-            return_value=AIMessage(content=reasoned.model_dump_json())
-        )
+        mock_agent.call_llm = AsyncMock(return_value=AIMessage(content=reasoned.model_dump_json()))
 
         result = await sa.run(
             [SystemMessage(content="system"), AIMessage(content="hi")],
@@ -139,9 +137,7 @@ class TestStateAI:
     async def test_run_with_invalid_json_falls_back(self):
         sa = StateAI("reasoning", {})
         mock_agent = MagicMock()
-        mock_agent.call_llm = AsyncMock(
-            return_value=AIMessage(content="not valid json at all")
-        )
+        mock_agent.call_llm = AsyncMock(return_value=AIMessage(content="not valid json at all"))
 
         result = await sa.run([], mock_agent)
         assert isinstance(result, AIMessage)
@@ -155,9 +151,7 @@ class TestStateAI:
 
         result = await sa.run([], mock_agent)
         assert isinstance(result, AIMessage)
-        assert (
-            "issue" in result.content.lower() or "try again" in result.content.lower()
-        )
+        assert "issue" in result.content.lower() or "try again" in result.content.lower()
 
     @pytest.mark.asyncio
     async def test_run_with_clarification(self):
@@ -170,9 +164,7 @@ class TestStateAI:
             final="I need more info.",
         )
         mock_agent = MagicMock()
-        mock_agent.call_llm = AsyncMock(
-            return_value=AIMessage(content=reasoned.model_dump_json())
-        )
+        mock_agent.call_llm = AsyncMock(return_value=AIMessage(content=reasoned.model_dump_json()))
 
         result = await sa.run([], mock_agent)
         assert "Could you clarify?" in result.content
@@ -231,9 +223,7 @@ class TestStateTool:
             }
         )
 
-        result = await st.choose_tool(
-            [SystemMessage(content="find something")], mock_agent
-        )
+        result = await st.choose_tool([SystemMessage(content="find something")], mock_agent)
         assert result["tool_name"] == "search"
         assert result["tool_args"] == {"query": "test"}
 
@@ -245,9 +235,7 @@ class TestStateTool:
         mock_agent.tool_manager = MagicMock()
         mock_agent.tool_manager.call_tool = AsyncMock(return_value={"result": "ok"})
 
-        result = await st.execute_tool(
-            {"tool_name": "search", "tool_args": {"q": "test"}}, mock_agent
-        )
+        result = await st.execute_tool({"tool_name": "search", "tool_args": {"q": "test"}}, mock_agent)
         assert result == {"result": "ok"}
         mock_agent.tool_manager.call_tool.assert_called_once_with(
             tool_name="search", arguments={"q": "test"}, user_id="user1"
