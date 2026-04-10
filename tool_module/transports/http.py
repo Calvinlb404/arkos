@@ -6,17 +6,18 @@ Supports OAuth 2.1 with PKCE for authentication.
 """
 
 import asyncio
-import aiohttp
+import base64
+import hashlib
 import json
 import logging
-import hashlib
 import secrets
-import base64
 import webbrowser
-from typing import Dict, Any, Optional
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlencode, urlparse, parse_qs
+from typing import Any
+from urllib.parse import parse_qs, urlencode, urlparse
+
+import aiohttp
 
 from .base import MCPTransport
 
@@ -42,13 +43,13 @@ class HTTPTransport(MCPTransport):
         - token: Bearer token (if type is "bearer")
     """
 
-    def __init__(self, url: str, auth_config: Optional[Dict[str, Any]] = None):
+    def __init__(self, url: str, auth_config: dict[str, Any] | None = None):
         self.url = url
         self.auth_config = auth_config or {}
-        self.session: Optional[aiohttp.ClientSession] = None
-        self.access_token: Optional[str] = None
-        self.refresh_token: Optional[str] = None
-        self.oauth_manager: Optional[OAuthManager] = None
+        self.session: aiohttp.ClientSession | None = None
+        self.access_token: str | None = None
+        self.refresh_token: str | None = None
+        self.oauth_manager: OAuthManager | None = None
 
         # If OAuth is configured, create OAuth manager
         if auth_config and auth_config.get("type") == "oauth":
@@ -75,11 +76,11 @@ class HTTPTransport(MCPTransport):
                 logger.info("OAuth authentication successful")
             except Exception as e:
                 logger.error(f"OAuth authentication failed: {e}")
-                raise RuntimeError(f"HTTP transport authentication failed: {e}")
+                raise RuntimeError(f"HTTP transport authentication failed: {e}") from e
 
         logger.info("HTTP transport connected")
 
-    async def send_request(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def send_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         """Send JSON-RPC request via HTTP POST."""
         if not self.session:
             raise RuntimeError("HTTP transport not connected")
@@ -102,9 +103,7 @@ class HTTPTransport(MCPTransport):
         logger.debug(f"HTTP >> {json.dumps(request)}")
 
         try:
-            async with self.session.post(
-                self.url, json=request, headers=headers
-            ) as response:
+            async with self.session.post(self.url, json=request, headers=headers) as response:
                 # Handle 401 - need authentication
                 if response.status == 401:
                     if self.oauth_manager:
@@ -113,9 +112,7 @@ class HTTPTransport(MCPTransport):
                         # Retry with new token
                         return await self.send_request(method, params)
                     else:
-                        raise RuntimeError(
-                            "Authentication required but no OAuth configured"
-                        )
+                        raise RuntimeError("Authentication required but no OAuth configured")
 
                 # Handle other errors
                 if response.status >= 400:
@@ -130,9 +127,9 @@ class HTTPTransport(MCPTransport):
 
         except aiohttp.ClientError as e:
             logger.error(f"HTTP request failed: {e}")
-            raise RuntimeError(f"HTTP transport error: {e}")
+            raise RuntimeError(f"HTTP transport error: {e}") from e
 
-    async def send_notification(self, method: str, params: Dict[str, Any]) -> None:
+    async def send_notification(self, method: str, params: dict[str, Any]) -> None:
         """Send JSON-RPC notification via HTTP POST (no response expected)."""
         if not self.session:
             raise RuntimeError("HTTP transport not connected")
@@ -217,14 +214,10 @@ class OAuthManager:
 
         # 3. Get authorization code from user
         state = secrets.token_urlsafe(32)
-        auth_code = await self._get_authorization_code(
-            auth_server, code_challenge, state
-        )
+        auth_code = await self._get_authorization_code(auth_server, code_challenge, state)
 
         # 4. Exchange code for tokens
-        tokens = await self._exchange_code_for_token(
-            auth_server, auth_code, code_verifier
-        )
+        tokens = await self._exchange_code_for_token(auth_server, auth_code, code_verifier)
 
         # 5. Cache tokens
         self._save_tokens(tokens)
@@ -232,7 +225,7 @@ class OAuthManager:
         logger.info("OAuth authentication complete")
         return tokens["access_token"]
 
-    async def _discover_oauth_server(self) -> Dict[str, str]:
+    async def _discover_oauth_server(self) -> dict[str, str]:
         """Discover OAuth endpoints from server metadata."""
         logger.info("Discovering OAuth server endpoints")
 
@@ -249,9 +242,7 @@ class OAuthManager:
                     if response.status == 200:
                         metadata = await response.json()
                         return {
-                            "authorization_endpoint": metadata[
-                                "authorization_endpoint"
-                            ],
+                            "authorization_endpoint": metadata["authorization_endpoint"],
                             "token_endpoint": metadata["token_endpoint"],
                         }
             except Exception as e:
@@ -266,20 +257,14 @@ class OAuthManager:
 
     def _generate_code_verifier(self) -> str:
         """Generate PKCE code verifier."""
-        return (
-            base64.urlsafe_b64encode(secrets.token_bytes(32))
-            .decode("utf-8")
-            .rstrip("=")
-        )
+        return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("utf-8").rstrip("=")
 
     def _generate_code_challenge(self, verifier: str) -> str:
         """Generate PKCE code challenge from verifier."""
         digest = hashlib.sha256(verifier.encode()).digest()
         return base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
 
-    async def _get_authorization_code(
-        self, auth_server: Dict[str, str], code_challenge: str, state: str
-    ) -> str:
+    async def _get_authorization_code(self, auth_server: dict[str, str], code_challenge: str, state: str) -> str:
         """Open browser for user authorization and capture code."""
         # Build authorization URL
         auth_params = {
@@ -311,9 +296,7 @@ class OAuthManager:
                         auth_code_future.set_result(code)
                         self.send_response(200)
                         self.end_headers()
-                        self.wfile.write(
-                            b"Authorization successful! You can close this window."
-                        )
+                        self.wfile.write(b"Authorization successful! You can close this window.")
                     else:
                         auth_code_future.set_exception(RuntimeError("State mismatch"))
                         self.send_response(400)
@@ -321,9 +304,7 @@ class OAuthManager:
                         self.wfile.write(b"Authorization failed: state mismatch")
                 else:
                     error = query.get("error", ["unknown"])[0]
-                    auth_code_future.set_exception(
-                        RuntimeError(f"Authorization error: {error}")
-                    )
+                    auth_code_future.set_exception(RuntimeError(f"Authorization error: {error}"))
                     self.send_response(400)
                     self.end_headers()
                     self.wfile.write(f"Authorization failed: {error}".encode())
@@ -345,20 +326,16 @@ class OAuthManager:
             await asyncio.get_event_loop().run_in_executor(None, server.handle_request)
 
             # Get the authorization code
-            auth_code = await asyncio.wait_for(
-                auth_code_future, timeout=300
-            )  # 5 min timeout
+            auth_code = await asyncio.wait_for(auth_code_future, timeout=300)  # 5 min timeout
 
             return auth_code
 
-        except asyncio.TimeoutError:
-            raise RuntimeError("Authorization timeout - no response received")
+        except TimeoutError as e:
+            raise RuntimeError("Authorization timeout - no response received") from e
         finally:
             server.server_close()
 
-    async def _exchange_code_for_token(
-        self, auth_server: Dict[str, str], code: str, verifier: str
-    ) -> Dict[str, Any]:
+    async def _exchange_code_for_token(self, auth_server: dict[str, str], code: str, verifier: str) -> dict[str, Any]:
         """Exchange authorization code for access token."""
         token_data = {
             "grant_type": "authorization_code",
@@ -368,15 +345,15 @@ class OAuthManager:
             "code_verifier": verifier,
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                auth_server["token_endpoint"], data=token_data
-            ) as response:
-                if response.status != 200:
-                    error = await response.text()
-                    raise RuntimeError(f"Token exchange failed: {error}")
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(auth_server["token_endpoint"], data=token_data) as response,
+        ):
+            if response.status != 200:
+                error = await response.text()
+                raise RuntimeError(f"Token exchange failed: {error}")
 
-                return await response.json()
+            return await response.json()
 
     async def _refresh_token(self, refresh_token: str) -> str:
         """Refresh access token using refresh token."""
@@ -389,31 +366,31 @@ class OAuthManager:
             "client_id": self.client_id,
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                auth_server["token_endpoint"], data=token_data
-            ) as response:
-                if response.status != 200:
-                    error = await response.text()
-                    raise RuntimeError(f"Token refresh failed: {error}")
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(auth_server["token_endpoint"], data=token_data) as response,
+        ):
+            if response.status != 200:
+                error = await response.text()
+                raise RuntimeError(f"Token refresh failed: {error}")
 
-                tokens = await response.json()
-                self._save_tokens(tokens)
-                return tokens["access_token"]
+            tokens = await response.json()
+            self._save_tokens(tokens)
+            return tokens["access_token"]
 
-    def _load_cached_token(self) -> Optional[Dict[str, Any]]:
+    def _load_cached_token(self) -> dict[str, Any] | None:
         """Load token from cache file."""
         if not self.token_cache_file.exists():
             return None
 
         try:
-            with open(self.token_cache_file, "r") as f:
+            with open(self.token_cache_file) as f:
                 return json.load(f)
         except Exception as e:
             logger.warning(f"Failed to load cached token: {e}")
             return None
 
-    def _save_tokens(self, tokens: Dict[str, Any]) -> None:
+    def _save_tokens(self, tokens: dict[str, Any]) -> None:
         """Save tokens to cache file."""
         self.token_cache_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -423,7 +400,7 @@ class OAuthManager:
         # Set restrictive permissions
         self.token_cache_file.chmod(0o600)
 
-    def _is_token_expired(self, token_data: Dict[str, Any]) -> bool:
+    def _is_token_expired(self, token_data: dict[str, Any]) -> bool:
         """Check if token is expired (simple check, could be improved)."""
         # For now, just return False and let the server tell us if expired
         # Could implement proper expiry checking with timestamps

@@ -7,7 +7,7 @@ Available transports:
 """
 
 from .base import MCPTransport
-from .stdio import StdioTransport
 from .http import HTTPTransport
+from .stdio import StdioTransport
 
 __all__ = ["MCPTransport", "StdioTransport", "HTTPTransport"]
