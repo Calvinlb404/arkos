@@ -59,7 +59,7 @@ jobs:
               --exclude='.coverage' \
               --exclude='htmlcov' \
               --exclude='.claude' \
-              -czf deploy.tar.gz .
+              -czf deploy.tar.gz . || true  # tar warns "file changed as we read it" which is non-fatal
 
       - name: Upload to server
         run: |
