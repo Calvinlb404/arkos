@@ -1,9 +1,9 @@
-from typing import Any, AsyncIterator, Dict, List, Optional, Union
-
-from pydantic import BaseModel, Field
+from collections.abc import AsyncIterator
+from typing import Any, Optional
 
 # Import the asynchronous client
 from openai import AsyncOpenAI
+from pydantic import BaseModel, Field
 
 
 # --- Custom Message Classes ---
@@ -31,7 +31,7 @@ class ToolMessage(Message):
     """Represents a message from a tool call"""
 
     role: str = "tool"
-    tool_calls: Optional[dict] = None
+    tool_calls: dict | None = None
 
 
 class AIMessage(Message):
@@ -42,9 +42,9 @@ class AIMessage(Message):
 
     role: str = "assistant"
     # content is now Optional[str] to handle cases where the AI's turn is solely a tool call.
-    content: Optional[str] = None
+    content: str | None = None
 
-    tool_calls: Optional[dict] = None
+    tool_calls: dict | None = None
 
 
 class ArkModelLink(BaseModel):
@@ -73,9 +73,7 @@ class ArkModelLink(BaseModel):
             api_key="-",  # Placeholder/Dummy API key
         )
 
-    async def make_llm_call(
-        self, messages: List[Message], json_schema: Optional, stream=False
-    ) -> Union[Dict[str, Any], str]:
+    async def make_llm_call(self, messages: list[Message], json_schema: Optional, stream=False) -> dict[str, Any] | str:
         """
         Makes an ASYNCHRONOUS call to the OpenAI-compatible LLM endpoint.
 
@@ -95,9 +93,7 @@ class ArkModelLink(BaseModel):
                 openai_messages_payload.append({"role": "user", "content": msg.content})
 
             elif isinstance(msg, SystemMessage):
-                openai_messages_payload.append(
-                    {"role": "system", "content": msg.content}
-                )
+                openai_messages_payload.append({"role": "system", "content": msg.content})
 
             elif isinstance(msg, ToolMessage):
                 # Note: ToolMessage in OpenAI API usually requires 'tool_call_id'
@@ -140,7 +136,7 @@ class ArkModelLink(BaseModel):
             print(f"Error during async LLM call: {e}")
             return f"Error: An error occurred during async LLM call: {e}"
 
-    async def generate_response(self, messages: List[Message], json_schema) -> str:
+    async def generate_response(self, messages: list[Message], json_schema) -> str:
         """
         ASYNCHRONOUSLY Generates a response from the model.
 
@@ -157,14 +153,12 @@ class ArkModelLink(BaseModel):
         conversation_history = messages
 
         # *** AWAIT the asynchronous LLM call ***
-        response_content = await self.make_llm_call(
-            conversation_history, json_schema=json_schema
-        )
+        response_content = await self.make_llm_call(conversation_history, json_schema=json_schema)
 
         # The response is the string content (either regular text or a JSON string)
         return response_content
 
-    def _format_messages(self, messages: List[Message]) -> List[Dict[str, str]]:
+    def _format_messages(self, messages: list[Message]) -> list[dict[str, str]]:
         """Convert Message objects to OpenAI format."""
         formatted = []
         for msg in messages:
@@ -174,7 +168,7 @@ class ArkModelLink(BaseModel):
                 formatted.append({"role": "assistant", "content": msg.content or ""})
         return formatted
 
-    async def generate_stream(self, messages: List[Message]) -> AsyncIterator[str]:
+    async def generate_stream(self, messages: list[Message]) -> AsyncIterator[str]:
         """Stream tokens as they're generated."""
         openai_messages = self._format_messages(messages)
 
