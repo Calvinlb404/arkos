@@ -223,3 +223,4 @@ This requires an NVIDIA GPU with Docker GPU support configured.
 | Ishaana Misra         | Backend        | ishaanam        | MIT           |
 | Hudson Hilal          | Backend        | hhilal123       | MIT           |
 | Calvin Baker          | Backend        | Calvinlb404     | MIT           |
+| Kshitij Duraphe       | DevOps         | ksd3            | BU            |
