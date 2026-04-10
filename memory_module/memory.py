@@ -1,28 +1,26 @@
 # memory.py
 import os
-import uuid
 import sys
-from psycopg2 import pool
-from typing import Dict
-from mem0 import Memory as Mem0Memory
-from dotenv import load_dotenv
-from concurrent.futures import ThreadPoolExecutor
 import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+
+from dotenv import load_dotenv
+from mem0 import Memory as Mem0Memory
+from psycopg2 import pool
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+
 from model_module.ArkModelNew import (
-    Message,
-    UserMessage,
     AIMessage,
+    Message,
     SystemMessage,
     ToolMessage,
+    UserMessage,
 )
 
-
-from typing import Type
-
-ROLE_TO_CLASS: Dict[str, Type[Message]] = {
+ROLE_TO_CLASS: dict[str, type[Message]] = {
     "system": SystemMessage,
     "user": UserMessage,
     "assistant": AIMessage,
@@ -30,7 +28,7 @@ ROLE_TO_CLASS: Dict[str, Type[Message]] = {
 }
 
 
-CLASS_TO_ROLE: Dict[Type[Message], str] = {
+CLASS_TO_ROLE: dict[type[Message], str] = {
     SystemMessage: "system",
     UserMessage: "user",
     AIMessage: "assistant",
@@ -80,9 +78,7 @@ def _get_pool(db_url: str):
     if _connection_pool is None:
         with _pool_lock:
             if _connection_pool is None:
-                _connection_pool = pool.ThreadedConnectionPool(
-                    minconn=1, maxconn=10, dsn=db_url
-                )
+                _connection_pool = pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=db_url)
     return _connection_pool
 
 
@@ -93,9 +89,7 @@ class Memory:
 
     """
 
-    def __init__(
-        self, user_id: str, session_id: str, db_url: str, use_long_term: bool = True
-    ):
+    def __init__(self, user_id: str, session_id: str, db_url: str, use_long_term: bool = True):
         self.user_id = user_id
         self.db_url = db_url
         self.use_long_term = use_long_term  # Toggle for long-term memory
@@ -137,9 +131,7 @@ class Memory:
         """Background task to add to mem0 (non-blocking)."""
         try:
             if self._mem0:
-                self._mem0.add(
-                    messages=content, metadata=metadata, user_id=self.user_id
-                )
+                self._mem0.add(messages=content, metadata=metadata, user_id=self.user_id)
         except Exception as e:
             print(f"[mem0 background] Error: {e}")
 
@@ -171,9 +163,7 @@ class Memory:
                     "session_id": self.session_id,
                     "role": role,
                 }
-                _executor.submit(
-                    self._add_to_mem0_background, message.content, metadata
-                )
+                _executor.submit(self._add_to_mem0_background, message.content, metadata)
 
             return True
 
@@ -183,10 +173,10 @@ class Memory:
             traceback.print_exc()
             return False
 
-    def retrieve_long_memory(
-        self, context: list = [], mem0_limit: int = 10
-    ) -> SystemMessage:
+    def retrieve_long_memory(self, context: list | None = None, mem0_limit: int = 10) -> SystemMessage:
         """Retrieve relevant long term memories for the current user."""
+        if context is None:
+            context = []
         # Skip if long-term memory is disabled
         if not self.use_long_term or not self._mem0:
             return SystemMessage(content="")
@@ -204,10 +194,7 @@ class Memory:
                 limit=mem0_limit,  # Reduced from 50 to 10
             )
 
-            memory_entries = [
-                f"{r.get('role', 'user')}: {r['memory']}"
-                for r in results.get("results", [])
-            ]
+            memory_entries = [f"{r.get('role', 'user')}: {r['memory']}" for r in results.get("results", [])]
 
             if not memory_entries:
                 return SystemMessage(content="")
@@ -252,15 +239,9 @@ class Memory:
 
 
 if __name__ == "__main__":
-    test_instance = Memory(
-        user_id="alice_test", session_id="session_test", db_url=os.environ["DB_URL"]
-    )
+    test_instance = Memory(user_id="alice_test", session_id="session_test", db_url=os.environ["DB_URL"])
 
-    print(
-        test_instance.add_memory(
-            SystemMessage(content="My favorite color is blue and I live in New York")
-        )
-    )
+    print(test_instance.add_memory(SystemMessage(content="My favorite color is blue and I live in New York")))
 
     context = test_instance.retrieve_short_memory(turns=2)
     print(context)
