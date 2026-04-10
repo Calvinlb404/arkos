@@ -44,23 +44,18 @@ test:
         test_loader = ConfigLoader(temp_config_path)
 
         # Test substitutions
-        assert (
-            test_loader.get("test.db_url")
-            == "postgresql://testuser:testpass@localhost:5432/testdb"
-        ), "DB URL should be substituted"
+        assert test_loader.get("test.db_url") == "postgresql://testuser:testpass@localhost:5432/testdb", (
+            "DB URL should be substituted"
+        )
         print("  [OK] Database URL substituted correctly")
 
-        assert test_loader.get("test.api_key") == "test-api-key-12345", (
-            "API key should be substituted"
-        )
+        assert test_loader.get("test.api_key") == "test-api-key-12345", "API key should be substituted"
         print("  [OK] API key substituted correctly")
 
         assert test_loader.get("test.port") == "8080", "Port should be substituted"
         print("  [OK] Port substituted correctly")
 
-        assert test_loader.get("test.static_value") == "no_substitution", (
-            "Static values should remain unchanged"
-        )
+        assert test_loader.get("test.static_value") == "no_substitution", "Static values should remain unchanged"
         print("  [OK] Static values preserved correctly")
 
     finally:
