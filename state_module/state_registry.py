@@ -16,6 +16,7 @@ def auto_register_states(package_name: str):
 
 
 def register_state(cls):
+    """Decorator that registers a State subclass in STATE_REGISTRY by its `type` attribute."""
     state_type = getattr(cls, "type", None)
     print(f"Registering state: {cls.type}")
     if not state_type:
