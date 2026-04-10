@@ -1,30 +1,26 @@
 # agent.py
 
+import json
 import os
 import sys
 import time
-from pydantic import create_model, Field
-from typing import List, Tuple, Dict, Any
-import json
 from enum import Enum
+from typing import Any
 
+from pydantic import Field, create_model
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from state_module.state_handler import StateHandler
-
-# Assuming ArkModelLink.generate_response is actually ArkModelLink.agenerate_response
-from model_module.ArkModelNew import ArkModelLink, AIMessage, SystemMessage
 from memory_module.memory import Memory
 
+# Assuming ArkModelLink.generate_response is actually ArkModelLink.agenerate_response
+from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage
+from state_module.state_handler import StateHandler
 
 MAX_ITER = 10
 
 
 class Agent:
-    """
-
-    Default agent class
-    """
+    """Default agent class that orchestrates state transitions, LLM calls, and tool usage."""
 
     def __init__(
         self,
@@ -34,6 +30,7 @@ class Agent:
         llm: ArkModelLink,
         tool_manager=None,
     ):
+        """Initialize the agent with a state graph, memory backend, LLM, and optional tool manager."""
         self.agent_id = agent_id
         self.flow = flow
         self.memory = memory
@@ -58,7 +55,7 @@ class Agent:
     #    self.bind_tool(tool)
     #    self.tool_names.append(tool_name)
 
-    def fill_tool_args_class(self, tool_name: str, tool_args: Dict[str, Any]):
+    def fill_tool_args_class(self, tool_name: str, tool_args: dict[str, Any]):
         """
         Returns a Pydantic object whose .model_dump() is:
           {"tool_name": <tool_name>, "tool_args": <tool_args>}
@@ -68,7 +65,7 @@ class Agent:
             "ToolCall",
             tool_name=(str, Field(description="Tool name to execute")),
             tool_args=(
-                Dict[str, Any],
+                dict[str, Any],
                 Field(default_factory=dict, description="Tool args"),
             ),
         )
@@ -100,7 +97,7 @@ class Agent:
 
         return ToolOptionsModel
 
-    def create_next_state_class(self, options: List[Tuple[str, str]]):
+    def create_next_state_class(self, options: list[tuple[str, str]]):
         """
         options: list of tuples (next_state, description of state)
         Returns a Pydantic model class with a single field 'next_state',
@@ -147,9 +144,12 @@ class Agent:
         Chooses subsequent transition in state graph
         """
 
-        transition_tuples = list(zip(transitions_dict["tt"], transitions_dict["td"]))
-        prompt = f"""given the context of the conversation and the following state options {transition_tuples} output the most reasonable next state.
-                 do not use tool result to determine the next state"""
+        transition_tuples = list(zip(transitions_dict["tt"], transitions_dict["td"], strict=False))
+        prompt = (
+            f"given the context of the conversation and the following state options "
+            f"{transition_tuples} output the most reasonable next state. "
+            f"do not use tool result to determine the next state"
+        )
 
         # creates pydantic class and a model dump
         NextStates = self.create_next_state_class(transition_tuples)
@@ -257,17 +257,13 @@ class Agent:
 
             messages_list = self.memory.retrieve_short_memory(5)
             if self.current_state.check_transition_ready(messages_list):
-                transition_dict = self.flow.get_transitions(
-                    self.current_state, messages_list
-                )
+                transition_dict = self.flow.get_transitions(self.current_state, messages_list)
                 transition_names = transition_dict["tt"]
 
                 if len(transition_names) == 1:
                     next_state_name = transition_names[0]
                 else:
-                    next_state_name = await self.choose_transition(
-                        transition_dict, messages_list
-                    )
+                    next_state_name = await self.choose_transition(transition_dict, messages_list)
 
                 self.current_state = self.flow.get_state(next_state_name)
                 print("agent.py CURR STATE: ", self.current_state)
@@ -337,18 +333,14 @@ class Agent:
             # Handle state transition (same logic as non-streaming step)
             messages_list = self.memory.retrieve_short_memory(5)
             if self.current_state.check_transition_ready(messages_list):
-                transition_dict = self.flow.get_transitions(
-                    self.current_state, messages_list
-                )
+                transition_dict = self.flow.get_transitions(self.current_state, messages_list)
                 transition_names = transition_dict["tt"]
                 print(f"agent.py [STREAM] Transitions: {transition_names}")
 
                 if len(transition_names) == 1:
                     next_state_name = transition_names[0]
                 else:
-                    next_state_name = await self.choose_transition(
-                        transition_dict, messages_list
-                    )
+                    next_state_name = await self.choose_transition(transition_dict, messages_list)
 
                 print(f"agent.py [STREAM] -> {next_state_name}")
                 self.current_state = self.flow.get_state(next_state_name)
