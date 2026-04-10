@@ -101,17 +101,43 @@ async def startup():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint to verify server and dependencies."""
+    """Health check endpoint to verify server and all dependencies."""
     import requests
 
-    llm_status = "unknown"
-    try:
-        response = requests.get("http://localhost:30000/v1/models", timeout=2)
-        llm_status = "running" if response.status_code == 200 else "error"
-    except Exception:
-        llm_status = "not_running"
+    services = {}
 
-    return JSONResponse(content={"status": "ok", "llm_server": llm_status, "port": 1112})
+    # Check SGLang (LLM inference)
+    try:
+        resp = requests.get("http://localhost:30000/v1/models", timeout=2)
+        services["sglang"] = "running" if resp.status_code == 200 else "error"
+    except Exception:
+        services["sglang"] = "not_running"
+
+    # Check TEI (text embeddings)
+    try:
+        resp = requests.get("http://localhost:8081/health", timeout=2)
+        services["tei"] = "running" if resp.status_code == 200 else "error"
+    except Exception:
+        services["tei"] = "not_running"
+
+    # Check Postgres
+    try:
+        import psycopg2
+
+        conn = psycopg2.connect(config.get("database.url"), connect_timeout=2)
+        conn.close()
+        services["postgres"] = "running"
+    except Exception:
+        services["postgres"] = "not_running"
+
+    # Overall status: degraded if any service is down, ok if all running
+    all_running = all(s == "running" for s in services.values())
+    overall = "ok" if all_running else "degraded"
+
+    return JSONResponse(
+        content={"status": overall, "services": services, "port": 1112},
+        status_code=200 if all_running else 503,
+    )
 
 
 @app.post("/v1/chat/completions")
