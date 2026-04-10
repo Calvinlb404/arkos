@@ -118,6 +118,29 @@ jobs:
             exit 1
           DEPLOY_SCRIPT
 
+      - name: Smoke test
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} << 'SMOKE_SCRIPT'
+            set -e
+            echo "=== Running smoke test ==="
+
+            # Send a real chat request through the full stack
+            response=$(curl -sf -X POST http://localhost:1112/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -d '{"model":"ark-agent","messages":[{"role":"user","content":"Say hello in one word."}]}' \
+              --max-time 60)
+
+            # Verify we got a valid response with content
+            echo "$response" | python3 -c "
+            import sys, json
+            data = json.load(sys.stdin)
+            assert 'choices' in data, 'No choices in response'
+            content = data['choices'][0]['message']['content']
+            assert len(content) > 0, 'Empty response content'
+            print(f'Smoke test passed: {content[:100]}')
+            "
+          SMOKE_SCRIPT
+
       - name: Rollback on failure
         if: failure()
         run: |
