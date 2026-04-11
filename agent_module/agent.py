@@ -14,6 +14,7 @@ from memory_module.memory import Memory
 
 # Assuming ArkModelLink.generate_response is actually ArkModelLink.agenerate_response
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage
+from state_module.base_state import StateOutput
 from state_module.state_handler import StateHandler
 
 MAX_ITER = 10
@@ -44,6 +45,7 @@ class Agent:
         self.tool_names = []
         self.available_tools = {}
         self.current_user_id = None  # Set per-request for per-user tool auth
+        self.last_state_output: StateOutput | None = None
 
     # def bind_tool(self, tool):
     #
@@ -221,7 +223,7 @@ class Agent:
 
         print("agent.py received message")
 
-        last_ai_message = None
+        self.last_state_output = None
         retry_count = 0
         print("agent.py CURR STATE: ", self.current_state)
         print("agent.py IS TERMINAL?:", self.current_state.is_terminal)
@@ -244,12 +246,11 @@ class Agent:
             print(f"[TIMING] state.run: {time.time() - t0:.3f}s")
             print(f"[TIMING] loop total: {time.time() - loop_start:.3f}s")
             if update:
-                # messages_list.append(update)
-                update_list = [update]
-                self.add_context(update_list)  # add update to memory
-
-                if isinstance(update, AIMessage):
-                    last_ai_message = update
+                assert isinstance(update,StateOutput), "State's output was not instance StateOutput"
+                if isinstance(update, StateOutput):
+                    self.last_state_output = update
+                    context_message = AIMessage(content=update.content)
+                self.add_context([context_message])
 
             if self.current_state.is_terminal:
                 print("REACHED TERMINAL")
@@ -273,9 +274,9 @@ class Agent:
                 break  # No transition ready, exit gracefully
 
         print(f"[TIMING] step total: {time.time() - step_start:.3f}s")
-        print("LAST_AI_MSG", last_ai_message)
+        print("LAST_STATE_OUTPUT", self.last_state_output)
         self.current_state = self.flow.get_state("agent_reply")
-        return last_ai_message
+        return self.last_state_output
 
     async def step_stream(self, messages, user_id: str = None):
         """
@@ -310,20 +311,31 @@ class Agent:
                 print(f"agent.py [STREAM] State returned: {type(update).__name__}")
             except Exception as e:
                 print(f"agent.py [STREAM] State error: {e}")
-                update = AIMessage(content=f"Error: {str(e)[:200]}")
+                update = StateOutput(
+                    content=f"Error: {str(e)[:200]}",
+                    completion_signal="error",
+                    error_detail=str(e),
+                )
                 self.current_state = self.flow.get_state("agent_reply")
 
             # Stream the state's output character by character
             if update and hasattr(update, "content") and update.content:
-                self.add_context([update])
+                assert isinstance(update,StateOutput), "State's output was not instance StateOutput"
+                if isinstance(update, StateOutput):
+                    self.last_state_output = update
+                    context_message = AIMessage(content=update.content)
+                self.add_context([context_message])
+
+            if update and hasattr(update, "content") and update.content:
+                if isinstance(update, StateOutput):
+                    self.last_state_output = update
+                    context_message = AIMessage(content=update.content)
+                self.add_context([context_message])
                 print(f"agent.py [STREAM] Streaming {len(update.content)} chars")
 
                 # Stream character by character for smooth output
                 for char in update.content:
                     yield char
-
-                if isinstance(update, AIMessage):
-                    print("agent.py [STREAM] AIMessage streamed")
 
             # Check terminal
             if self.current_state.is_terminal:

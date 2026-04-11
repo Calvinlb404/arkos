@@ -6,6 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
 from model_module.ArkModelNew import SystemMessage
+from state_module.base_state import StateOutput
 from state_module.state import State
 from state_module.state_registry import register_state
 from tool_module.tool_call import AuthRequiredError
@@ -86,12 +87,18 @@ class StateTool(State):
         try:
             tool_arg_dict = await self.choose_tool(context=context, agent=agent)
             tool_result = await self.execute_tool(tool_call=tool_arg_dict, agent=agent)
-            return SystemMessage(content=str(tool_result))
+            return StateOutput(
+                content=str(tool_result),
+                completion_signal="complete",
+                structured_data={"tool_result": tool_result},
+            )
 
         except AuthRequiredError as e:
-            # Return friendly message with connect link
-            return SystemMessage(
-                content=f"To complete this request, please connect your {e.service_info.get('name', e.service)}:\n\n"
-                f"👉 {e.connect_url}\n\n"
-                f"After connecting, try your request again."
+            return StateOutput(
+                content=(
+                    f"To complete this request, please connect your {e.service_info.get('name', e.service)}:\n\n"
+                    f"👉 {e.connect_url}\n\n"
+                    f"After connecting, try your request again."
+                ),
+                completion_signal="needs_input",
             )
