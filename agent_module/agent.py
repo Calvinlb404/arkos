@@ -246,7 +246,7 @@ class Agent:
             print(f"[TIMING] state.run: {time.time() - t0:.3f}s")
             print(f"[TIMING] loop total: {time.time() - loop_start:.3f}s")
             if update:
-                assert isinstance(update,StateOutput), "State's output was not instance StateOutput"
+                assert isinstance(update, StateOutput), "State's output was not instance StateOutput"
                 if isinstance(update, StateOutput):
                     self.last_state_output = update
                     context_message = AIMessage(content=update.content)
@@ -320,7 +320,7 @@ class Agent:
 
             # Stream the state's output character by character
             if update and hasattr(update, "content") and update.content:
-                assert isinstance(update,StateOutput), "State's output was not instance StateOutput"
+                assert isinstance(update, StateOutput), "State's output was not instance StateOutput"
                 if isinstance(update, StateOutput):
                     self.last_state_output = update
                     context_message = AIMessage(content=update.content)
