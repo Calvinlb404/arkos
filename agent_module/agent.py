@@ -247,10 +247,9 @@ class Agent:
             print(f"[TIMING] loop total: {time.time() - loop_start:.3f}s")
             if update:
                 assert isinstance(update, StateOutput), "State's output was not instance StateOutput"
-                if isinstance(update, StateOutput):
-                    self.last_state_output = update
-                    context_message = AIMessage(content=update.content)
-                self.add_context([context_message])
+                self.last_state_output = update
+                if update.content:
+                    self.add_context([AIMessage(content=update.content)])
 
             if self.current_state.is_terminal:
                 print("REACHED TERMINAL")
@@ -318,24 +317,14 @@ class Agent:
                 )
                 self.current_state = self.flow.get_state("agent_reply")
 
-            # Stream the state's output character by character
-            if update and hasattr(update, "content") and update.content:
+            if update:
                 assert isinstance(update, StateOutput), "State's output was not instance StateOutput"
-                if isinstance(update, StateOutput):
-                    self.last_state_output = update
-                    context_message = AIMessage(content=update.content)
-                self.add_context([context_message])
-
-            if update and hasattr(update, "content") and update.content:
-                if isinstance(update, StateOutput):
-                    self.last_state_output = update
-                    context_message = AIMessage(content=update.content)
-                self.add_context([context_message])
-                print(f"agent.py [STREAM] Streaming {len(update.content)} chars")
-
-                # Stream character by character for smooth output
-                for char in update.content:
-                    yield char
+                self.last_state_output = update
+                if update.content:
+                    self.add_context([AIMessage(content=update.content)])
+                    print(f"agent.py [STREAM] Streaming {len(update.content)} chars")
+                    for char in update.content:
+                        yield char
 
             # Check terminal
             if self.current_state.is_terminal:
