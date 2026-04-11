@@ -228,7 +228,7 @@ class Agent:
         print("agent.py CURR STATE: ", self.current_state)
         print("agent.py IS TERMINAL?:", self.current_state.is_terminal)
 
-        while not self.current_state.is_terminal:
+        while True:
             loop_start = time.time()
             print(f"Inner loop #{retry_count + 1}")
 
@@ -294,7 +294,7 @@ class Agent:
 
         retry_count = 0
 
-        while not self.current_state.is_terminal:
+        while True:
             print(f"agent.py [STREAM] Inner loop - State: {self.current_state.name}")
 
             if retry_count > MAX_ITER:
