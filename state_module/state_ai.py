@@ -3,11 +3,12 @@ import sys
 
 from pydantic import BaseModel, Field
 
-from model_module.ArkModelNew import AIMessage, SystemMessage
+from model_module.ArkModelNew import SystemMessage
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
+from state_module.base_state import StateOutput
 from state_module.state import State
 from state_module.state_registry import register_state
 
@@ -72,14 +73,20 @@ class StateAI(State):
 
         # Handle None or empty content
         if not output or not output.content:
-            return AIMessage(content="I encountered an issue processing your request. Please try again.")
+            return StateOutput(
+                content="I encountered an issue processing your request. Please try again.",
+                completion_signal="error",
+                error_detail="LLM returned empty content",
+            )
 
         try:
             data = ReasonedOutput.model_validate_json(output.content)
         except Exception as e:
-            # If JSON parsing fails, return the raw content as fallback
             print(f"Failed to parse structured output: {e}")
-            return AIMessage(content=output.content)
+            return StateOutput(
+                content=output.content,
+                completion_signal="complete",
+            )
 
         # Build response including the approach/reasoning
         response_parts = []
@@ -101,4 +108,5 @@ class StateAI(State):
             response_parts.append(data.clarifying_question)
 
         response = "\n".join(response_parts) if response_parts else data.final
-        return AIMessage(content=response)
+        signal = "needs_input" if data.needs_clarification else "complete"
+        return StateOutput(content=response, completion_signal=signal)
