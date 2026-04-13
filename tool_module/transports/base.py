@@ -5,7 +5,7 @@ All MCP transports (stdio, HTTP) implement this interface.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Any
 
 
 class MCPTransport(ABC):
@@ -19,14 +19,14 @@ class MCPTransport(ABC):
         pass
 
     @abstractmethod
-    async def send_request(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def send_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         """
         Send a JSON-RPC request and wait for response.
         """
         pass
 
     @abstractmethod
-    async def send_notification(self, method: str, params: Dict[str, Any]) -> None:
+    async def send_notification(self, method: str, params: dict[str, Any]) -> None:
         """
         Send a JSON-RPC notification (no response expected).
         """

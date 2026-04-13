@@ -2,11 +2,12 @@
 Per-user OAuth token storage for MCP servers.
 """
 
-import os
 import json
-import psycopg2
-from typing import Optional, Dict, Any
+import os
 from datetime import datetime
+from typing import Any
+
+import psycopg2
 
 
 class UserTokenStore:
@@ -54,7 +55,7 @@ class UserTokenStore:
         cur.close()
         conn.close()
 
-    def get_token(self, user_id: str, service: str) -> Optional[Dict[str, Any]]:
+    def get_token(self, user_id: str, service: str) -> dict[str, Any] | None:
         """Get stored token for a user and service."""
         conn = psycopg2.connect(self.db_url)
         cur = conn.cursor()
@@ -85,9 +86,9 @@ class UserTokenStore:
         user_id: str,
         service: str,
         access_token: str,
-        refresh_token: Optional[str] = None,
-        expires_at: Optional[datetime] = None,
-        token_data: Optional[Dict[str, Any]] = None,
+        refresh_token: str | None = None,
+        expires_at: datetime | None = None,
+        token_data: dict[str, Any] | None = None,
     ) -> bool:
         """Store or update token for a user and service."""
         conn = psycopg2.connect(self.db_url)

@@ -1,9 +1,7 @@
-import sys
 import os
+import sys
 
-from typing import Optional, List
 from pydantic import BaseModel, Field
-
 
 from model_module.ArkModelNew import AIMessage, SystemMessage
 
@@ -11,8 +9,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
 from state_module.state import State
-
-
 from state_module.state_registry import register_state
 
 
@@ -23,13 +19,9 @@ class ReasonedOutput(BaseModel):
     """
 
     intent: str = Field(..., description="What the agent is trying to accomplish")
-    approach: List[str] = Field(..., description="High-level reasoning steps")
-    needs_clarification: bool = Field(
-        ..., description="Whether more user input is required"
-    )
-    clarifying_question: Optional[str] = Field(
-        None, description="Single clarifying question if needed"
-    )
+    approach: list[str] = Field(..., description="High-level reasoning steps")
+    needs_clarification: bool = Field(..., description="Whether more user input is required")
+    clarifying_question: str | None = Field(None, description="Single clarifying question if needed")
     final: str = Field(..., description="User-facing response")
 
 
@@ -80,9 +72,7 @@ class StateAI(State):
 
         # Handle None or empty content
         if not output or not output.content:
-            return AIMessage(
-                content="I encountered an issue processing your request. Please try again."
-            )
+            return AIMessage(content="I encountered an issue processing your request. Please try again.")
 
         try:
             data = ReasonedOutput.model_validate_json(output.content)

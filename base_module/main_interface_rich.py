@@ -1,20 +1,18 @@
 import os
 import sys
-from openai import OpenAI
 
+from openai import OpenAI
+from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
-from rich.panel import Panel
-from rich.markdown import Markdown
 from rich.live import Live
+from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.table import Table
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.key_binding import KeyBindings
-
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from config_module.loader import config
-
 
 console = Console()
 
@@ -39,9 +37,7 @@ def handle_newline(event):
 session = PromptSession(key_bindings=bindings, multiline=True)
 
 # Point to your running ArkOS agent
-client = OpenAI(
-    base_url=f"http://localhost:{config.get('app.port')}/v1", api_key="not-needed"
-)
+client = OpenAI(base_url=f"http://localhost:{config.get('app.port')}/v1", api_key="not-needed")
 
 # Conversation history for display
 conversation_history = []
@@ -55,9 +51,7 @@ def display_header():
     header.add_row("[dim]Intelligent Agent Interface[/dim]")
 
     console.print(Panel(header, border_style="cyan", padding=(1, 2)))
-    console.print(
-        "[dim]Type [bold]/help[/bold] for commands, [bold]/exit[/bold] to quit[/dim]\n"
-    )
+    console.print("[dim]Type [bold]/help[/bold] for commands, [bold]/exit[/bold] to quit[/dim]\n")
 
 
 def display_message(role: str, content: str):

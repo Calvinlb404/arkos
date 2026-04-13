@@ -1,15 +1,16 @@
 """Tests for ArkModelLink in model_module/ArkModelNew.py."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from model_module.ArkModelNew import (
+    AIMessage,
     ArkModelLink,
     Message,
-    UserMessage,
     SystemMessage,
-    AIMessage,
     ToolMessage,
+    UserMessage,
 )
 
 
@@ -106,9 +107,7 @@ class TestMakeLLMCall:
             "client",
             new_callable=lambda: property(lambda self: mock_client),
         ):
-            result = await model.make_llm_call(
-                [UserMessage(content="hello")], json_schema=None
-            )
+            result = await model.make_llm_call([UserMessage(content="hello")], json_schema=None)
             assert result == "test response"
 
     @pytest.mark.asyncio
@@ -151,15 +150,15 @@ class TestMakeLLMCall:
         model = ArkModelLink()
 
         mock_client = MagicMock()
-        with patch.object(
-            ArkModelLink,
-            "client",
-            new_callable=lambda: property(lambda self: mock_client),
+        with (
+            patch.object(
+                ArkModelLink,
+                "client",
+                new_callable=lambda: property(lambda self: mock_client),
+            ),
+            pytest.raises(ValueError, match="Unsupported Message Type"),
         ):
-            with pytest.raises(ValueError, match="Unsupported Message Type"):
-                await model.make_llm_call(
-                    [Message(content="raw", role="custom")], json_schema=None
-                )
+            await model.make_llm_call([Message(content="raw", role="custom")], json_schema=None)
 
     @pytest.mark.asyncio
     async def test_stream_raises_not_implemented(self):
@@ -171,9 +170,7 @@ class TestMakeLLMCall:
             "client",
             new_callable=lambda: property(lambda self: mock_client),
         ):
-            result = await model.make_llm_call(
-                [UserMessage(content="hello")], json_schema=None, stream=True
-            )
+            result = await model.make_llm_call([UserMessage(content="hello")], json_schema=None, stream=True)
             # Returns error string since exception is caught
             assert "Error" in result
 
@@ -182,18 +179,14 @@ class TestMakeLLMCall:
         model = ArkModelLink()
 
         mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(
-            side_effect=Exception("Connection refused")
-        )
+        mock_client.chat.completions.create = AsyncMock(side_effect=Exception("Connection refused"))
 
         with patch.object(
             ArkModelLink,
             "client",
             new_callable=lambda: property(lambda self: mock_client),
         ):
-            result = await model.make_llm_call(
-                [UserMessage(content="hello")], json_schema=None
-            )
+            result = await model.make_llm_call([UserMessage(content="hello")], json_schema=None)
             assert "Error" in result
             assert "Connection refused" in result
 
@@ -203,9 +196,7 @@ class TestGenerateResponse:
     async def test_generate_response_delegates_to_make_llm_call(self):
         model = ArkModelLink()
 
-        with patch.object(
-            ArkModelLink, "make_llm_call", new_callable=AsyncMock
-        ) as mock_call:
+        with patch.object(ArkModelLink, "make_llm_call", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = "generated text"
             msgs = [UserMessage(content="hello")]
             result = await model.generate_response(msgs, json_schema=None)
@@ -278,9 +269,7 @@ class TestGenerateStream:
         model = ArkModelLink()
 
         mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(
-            side_effect=Exception("stream failed")
-        )
+        mock_client.chat.completions.create = AsyncMock(side_effect=Exception("stream failed"))
 
         with patch.object(
             ArkModelLink,

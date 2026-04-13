@@ -1,0 +1,171 @@
+name: Deploy
+
+# Runs only on push to main (after CI passes) or manual trigger.
+#
+# BEFORE THIS WORKS, you need to configure:
+#   1. GitHub repo secret: SSH_PRIVATE_KEY (private key for the deploy user)
+#   2. On ark.mit.edu: the deploy user's ~/.ssh/authorized_keys must have the public key
+#   3. On ark.mit.edu: a systemd service named "arkos" (or adjust the restart command below)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Deployment environment"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  DEPLOY_HOST: ark.mit.edu
+  DEPLOY_USER: arkos
+  DEPLOY_PATH: /home/arkos/arkos
+  APP_PORT: 1112
+
+jobs:
+  deploy:
+    name: Deploy to MIT SIPB
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment || 'production' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ env.DEPLOY_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Create deployment package
+        run: |
+          tar --exclude='.git' \
+              --exclude='__pycache__' \
+              --exclude='*.pyc' \
+              --exclude='.env' \
+              --exclude='venv' \
+              --exclude='.venv' \
+              --exclude='model_module/models' \
+              --exclude='model_module/hub' \
+              --exclude='depricated' \
+              --exclude='.pytest_cache' \
+              --exclude='.coverage' \
+              --exclude='htmlcov' \
+              --exclude='.claude' \
+              -czf deploy.tar.gz . || true  # tar warns "file changed as we read it" which is non-fatal
+
+      - name: Upload to server
+        run: |
+          scp -i ~/.ssh/deploy_key deploy.tar.gz \
+            ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }}:/tmp/arkos-deploy.tar.gz
+
+      - name: Deploy application
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} << 'DEPLOY_SCRIPT'
+            set -e
+
+            DEPLOY_DIR="/home/arkos/arkos"
+            BACKUP_DIR="${DEPLOY_DIR}_backup_$(date +%Y%m%d_%H%M%S)"
+
+            echo "=== Starting deployment ==="
+
+            # Backup current deployment
+            if [ -d "$DEPLOY_DIR" ]; then
+              echo "Backing up current deployment to $BACKUP_DIR"
+              cp -r "$DEPLOY_DIR" "$BACKUP_DIR"
+            fi
+
+            # Extract new deployment
+            echo "Extracting new deployment..."
+            mkdir -p "$DEPLOY_DIR"
+            cd "$DEPLOY_DIR"
+            tar -xzf /tmp/arkos-deploy.tar.gz
+            rm /tmp/arkos-deploy.tar.gz
+
+            # Restore .env from backup
+            if [ -f "${BACKUP_DIR}/.env" ]; then
+              cp "${BACKUP_DIR}/.env" "$DEPLOY_DIR/.env"
+            fi
+
+            # Install/update dependencies
+            echo "Installing dependencies..."
+            pip install --user -r requirements.txt --quiet
+
+            # Restart the application
+            echo "Restarting application..."
+            sudo systemctl restart arkos
+
+            # Health check
+            echo "Waiting for application to start..."
+            sleep 5
+            for i in {1..6}; do
+              if curl -sf http://localhost:1112/health > /dev/null; then
+                echo "Health check passed!"
+                exit 0
+              fi
+              echo "Health check attempt $i failed, retrying..."
+              sleep 5
+            done
+
+            echo "Health check failed after 30 seconds!"
+            exit 1
+          DEPLOY_SCRIPT
+
+      - name: Smoke test
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} << 'SMOKE_SCRIPT'
+            set -e
+            echo "=== Running smoke test ==="
+
+            # Send a real chat request through the full stack
+            response=$(curl -sf -X POST http://localhost:1112/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -d '{"model":"ark-agent","messages":[{"role":"user","content":"Say hello in one word."}]}' \
+              --max-time 60)
+
+            # Verify we got a valid response with content
+            echo "$response" | python3 -c "
+            import sys, json
+            data = json.load(sys.stdin)
+            assert 'choices' in data, 'No choices in response'
+            content = data['choices'][0]['message']['content']
+            assert len(content) > 0, 'Empty response content'
+            print(f'Smoke test passed: {content[:100]}')
+            "
+          SMOKE_SCRIPT
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} << 'ROLLBACK_SCRIPT'
+            set -e
+            DEPLOY_DIR="/home/arkos/arkos"
+            BACKUP_DIR=$(ls -td ${DEPLOY_DIR}_backup_* 2>/dev/null | head -1)
+
+            if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
+              echo "=== Rolling back to $BACKUP_DIR ==="
+              rm -rf "$DEPLOY_DIR"
+              mv "$BACKUP_DIR" "$DEPLOY_DIR"
+              sudo systemctl restart arkos
+              echo "Rollback completed"
+            else
+              echo "No backup found for rollback!"
+              exit 1
+            fi
+          ROLLBACK_SCRIPT
+
+      - name: Cleanup old backups
+        if: success()
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} << 'CLEANUP_SCRIPT'
+            DEPLOY_DIR="/home/arkos/arkos"
+            ls -td ${DEPLOY_DIR}_backup_* 2>/dev/null | tail -n +4 | xargs rm -rf 2>/dev/null || true
+            echo "Cleanup completed"
+          CLEANUP_SCRIPT

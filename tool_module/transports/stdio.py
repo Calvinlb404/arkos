@@ -5,11 +5,12 @@ Communicates with MCP servers via standard input/output (subprocess).
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
-from typing import Dict, Any, List, Optional
 from threading import Lock
+from typing import Any
 
 from .base import MCPTransport
 
@@ -33,13 +34,11 @@ class StdioTransport(MCPTransport):
         Environment variables for the subprocess
     """
 
-    def __init__(
-        self, command: str, args: List[str], env: Optional[Dict[str, str]] = None
-    ):
+    def __init__(self, command: str, args: list[str], env: dict[str, str] | None = None):
         self.command = command
         self.args = args
         self.env = env or {}
-        self.process: Optional[asyncio.subprocess.Process] = None
+        self.process: asyncio.subprocess.Process | None = None
         self.request_id = 0
         self._lock = Lock()
 
@@ -64,9 +63,9 @@ class StdioTransport(MCPTransport):
 
         except Exception as e:
             logger.error(f"Failed to start STDIO subprocess: {e}")
-            raise RuntimeError(f"STDIO transport connection failed: {e}")
+            raise RuntimeError(f"STDIO transport connection failed: {e}") from e
 
-    async def send_request(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def send_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         """Send JSON-RPC request via stdin and read response from stdout."""
         if not self.process:
             raise RuntimeError("STDIO transport not connected")
@@ -92,10 +91,8 @@ class StdioTransport(MCPTransport):
             # Capture stderr to show actual error
             stderr_output = ""
             if self.process.stderr:
-                try:
+                with contextlib.suppress(Exception):
                     stderr_output = (await self.process.stderr.read()).decode()
-                except Exception:
-                    pass
             error_msg = "STDIO server closed connection"
             if stderr_output:
                 error_msg += f"\nServer stderr: {stderr_output}"
@@ -106,7 +103,7 @@ class StdioTransport(MCPTransport):
 
         return response
 
-    async def send_notification(self, method: str, params: Dict[str, Any]) -> None:
+    async def send_notification(self, method: str, params: dict[str, Any]) -> None:
         """Send JSON-RPC notification via stdin (no response expected)."""
         if not self.process:
             raise RuntimeError("STDIO transport not connected")
@@ -126,7 +123,7 @@ class StdioTransport(MCPTransport):
             try:
                 self.process.terminate()
                 await asyncio.wait_for(self.process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Force killing STDIO subprocess")
                 self.process.kill()
                 await self.process.wait()

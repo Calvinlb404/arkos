@@ -1,24 +1,24 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
-import uvicorn
-import time
-import uuid
+import json
 import os
 import sys
-import json
+import time
+import uuid
+
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 
 # Standard boilerplate for module imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from config_module.loader import config
 from agent_module.agent import Agent
-from state_module.state_handler import StateHandler
-from memory_module.memory import Memory
-from model_module.ArkModelNew import ArkModelLink, UserMessage, SystemMessage, AIMessage
-from tool_module.tool_call import MCPToolManager
-from tool_module.token_store import UserTokenStore
 from base_module.auth import router as auth_router
-
+from config_module.loader import config
+from memory_module.memory import Memory
+from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage
+from state_module.state_handler import StateHandler
+from tool_module.token_store import UserTokenStore
+from tool_module.tool_call import MCPToolManager
 
 app = FastAPI(title="ArkOS Agent API", version="1.0.0")
 app.include_router(auth_router)
@@ -39,18 +39,14 @@ memory = Memory(
 # Default system prompt for the agent
 
 # ArkModelLink now uses AsyncOpenAI internally
-llm = ArkModelLink(
-    base_url=config.get("llm.base_url"), max_tokens=config.get("llm.max_tokens")
-)
+llm = ArkModelLink(base_url=config.get("llm.base_url"), max_tokens=config.get("llm.max_tokens"))
 
 
 # Token store for per-user MCP authentication
 token_store = UserTokenStore(config.get("database.url"))
 
 mcp_config = config.get("mcp_servers")
-tool_manager = (
-    MCPToolManager(mcp_config, token_store=token_store) if mcp_config else None
-)
+tool_manager = MCPToolManager(mcp_config, token_store=token_store) if mcp_config else None
 agent = Agent(
     agent_id=config.get("memory.user_id"),
     flow=flow,
@@ -84,7 +80,7 @@ def format_tools_for_system_prompt(tools: dict) -> str:
 
 @app.on_event("startup")
 async def startup():
-
+    """Initialize MCP servers and build the agent's system prompt with available tools."""
     base_system_prompt = (config.get("app.system_prompt") or "").strip()
 
     if tool_manager:
@@ -98,29 +94,49 @@ async def startup():
 
         tool_prompt = format_tools_for_system_prompt(agent.available_tools)
 
-        agent.system_prompt = (
-            base_system_prompt + "\n\n" + tool_prompt
-            if base_system_prompt
-            else tool_prompt
-        )
+        agent.system_prompt = base_system_prompt + "\n\n" + tool_prompt if base_system_prompt else tool_prompt
     else:
         agent.system_prompt = base_system_prompt
 
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint to verify server and dependencies."""
+    """Health check endpoint to verify server and all dependencies."""
     import requests
 
-    llm_status = "unknown"
+    services = {}
+
+    # Check SGLang (LLM inference)
     try:
-        response = requests.get("http://localhost:30000/v1/models", timeout=2)
-        llm_status = "running" if response.status_code == 200 else "error"
+        resp = requests.get("http://localhost:30000/v1/models", timeout=2)
+        services["sglang"] = "running" if resp.status_code == 200 else "error"
     except Exception:
-        llm_status = "not_running"
+        services["sglang"] = "not_running"
+
+    # Check TEI (text embeddings)
+    try:
+        resp = requests.get("http://localhost:8081/health", timeout=2)
+        services["tei"] = "running" if resp.status_code == 200 else "error"
+    except Exception:
+        services["tei"] = "not_running"
+
+    # Check Postgres
+    try:
+        import psycopg2
+
+        conn = psycopg2.connect(config.get("database.url"), connect_timeout=2)
+        conn.close()
+        services["postgres"] = "running"
+    except Exception:
+        services["postgres"] = "not_running"
+
+    # Overall status: degraded if any service is down, ok if all running
+    all_running = all(s == "running" for s in services.values())
+    overall = "ok" if all_running else "degraded"
 
     return JSONResponse(
-        content={"status": "ok", "llm_server": llm_status, "port": 1112}
+        content={"status": overall, "services": services, "port": 1112},
+        status_code=200 if all_running else 503,
     )
 
 
@@ -134,11 +150,7 @@ async def chat_completions(request: Request):
     stream = payload.get("stream", False)
 
     # Extract user_id from header or body for per-user tool auth
-    user_id = (
-        request.headers.get("X-User-ID")
-        or payload.get("user")
-        or payload.get("user_id")
-    )
+    user_id = request.headers.get("X-User-ID") or payload.get("user") or payload.get("user_id")
 
     context_msgs = []
     context_msgs.append(SystemMessage(content=agent.system_prompt))
@@ -158,6 +170,7 @@ async def chat_completions(request: Request):
     if stream:
 
         async def generate_stream():
+            """Yield SSE chunks in OpenAI streaming format."""
             chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
             async for chunk in agent.step_stream(context_msgs, user_id=user_id):
                 data = {

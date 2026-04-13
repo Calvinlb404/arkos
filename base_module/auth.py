@@ -6,8 +6,8 @@ import os
 import secrets
 from datetime import datetime
 
-from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from google_auth_oauthlib.flow import Flow
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -69,18 +69,14 @@ async def google_login(request: Request, user_id: str):
 
 
 @router.get("/google/callback")
-async def google_callback(
-    request: Request, code: str = None, state: str = None, error: str = None
-):
+async def google_callback(request: Request, code: str = None, state: str = None, error: str = None):
     """Handle Google OAuth callback."""
     # Import here to avoid circular imports
-    from tool_module.token_store import UserTokenStore
     from config_module.loader import config
+    from tool_module.token_store import UserTokenStore
 
     if error:
-        return HTMLResponse(
-            f"<h1>Authorization Failed</h1><p>{error}</p>", status_code=400
-        )
+        return HTMLResponse(f"<h1>Authorization Failed</h1><p>{error}</p>", status_code=400)
 
     if not state or state not in _oauth_states:
         return HTMLResponse(
@@ -98,9 +94,7 @@ async def google_callback(
     try:
         flow.fetch_token(code=code)
     except Exception as e:
-        return HTMLResponse(
-            f"<h1>Token Exchange Failed</h1><p>{e}</p>", status_code=400
-        )
+        return HTMLResponse(f"<h1>Token Exchange Failed</h1><p>{e}</p>", status_code=400)
 
     credentials = flow.credentials
 
@@ -132,8 +126,8 @@ async def google_callback(
 @router.get("/google/status")
 async def google_status(user_id: str):
     """Check if a user has Google Calendar connected."""
-    from tool_module.token_store import UserTokenStore
     from config_module.loader import config
+    from tool_module.token_store import UserTokenStore
 
     if not user_id:
         raise HTTPException(400, "user_id is required")
@@ -147,8 +141,8 @@ async def google_status(user_id: str):
 @router.delete("/google/disconnect")
 async def google_disconnect(user_id: str):
     """Disconnect Google Calendar for a user."""
-    from tool_module.token_store import UserTokenStore
     from config_module.loader import config
+    from tool_module.token_store import UserTokenStore
 
     if not user_id:
         raise HTTPException(400, "user_id is required")

@@ -1,11 +1,11 @@
 """Tests for Message Pydantic models in model_module/ArkModelNew.py."""
 
 from model_module.ArkModelNew import (
+    AIMessage,
     Message,
     SystemMessage,
-    UserMessage,
     ToolMessage,
-    AIMessage,
+    UserMessage,
 )
 
 
