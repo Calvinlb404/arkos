@@ -13,17 +13,12 @@ against the real Smithery API once SMITHERY_API_KEY is set:
     pytest tool_module/test_smithery_resolver.py -m integration -v
 """
 
-import pytest
-import requests
 from unittest.mock import MagicMock, patch
 
-from tool_module.smithery_resolver import (
-    SmitheryResolver,
-    SmitheryResolverError,
-    SERVER_ID_MAP,
-    resolve_tool_schema
-)
+import pytest
+import requests
 
+from tool_module.smithery_resolver import SERVER_ID_MAP, SmitheryResolver, SmitheryResolverError, resolve_tool_schema
 
 # ---------------------------------------------------------------------------
 # Shared fixtures

@@ -33,7 +33,7 @@ All three of the following refer to the same server:
 
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 
@@ -45,7 +45,7 @@ SMITHERY_API_BASE = "https://api.smithery.ai"
 # Maps ARKOS internal server names to Smithery qualifiedNames.
 # qualifiedName format is "namespace/server-name" (no leading @).
 # Add new entries here when new MCP servers are configured.
-SERVER_ID_MAP: Dict[str, str] = {
+SERVER_ID_MAP: dict[str, str] = {
     "google-calendar": "googlecalendar",
     "brave-search": "brave",
     "filesystem": "modelcontextprotocol/server-filesystem",
@@ -84,17 +84,17 @@ class SmitheryResolver:
     'object'
     """
 
-    def __init__(self, api_key: Optional[str] = None) -> None:
+    def __init__(self, api_key: str | None = None) -> None:
         self.api_key: str = api_key or os.environ.get("SMITHERY_API_KEY", "")
         # Cache: qualified_name -> {tool_name: tool_dict}
-        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._cache: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _headers(self) -> Dict[str, str]:
-        headers: Dict[str, str] = {"Accept": "application/json"}
+    def _headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {"Accept": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
@@ -124,7 +124,7 @@ class SmitheryResolver:
             return server_id[1:]
         return server_id
 
-    def _fetch_tools_for_server(self, qualified_name: str) -> Dict[str, Any]:
+    def _fetch_tools_for_server(self, qualified_name: str) -> dict[str, Any]:
         """
         Call the Smithery API and return a dict of tool_name -> tool_dict.
 
@@ -161,7 +161,7 @@ class SmitheryResolver:
             ) from exc
 
         data = response.json()
-        tools: List[Dict[str, Any]] = data.get("tools", [])
+        tools: list[dict[str, Any]] = data.get("tools", [])
 
         if not isinstance(tools, list):
             raise SmitheryResolverError(
@@ -182,7 +182,7 @@ class SmitheryResolver:
     # Public API
     # ------------------------------------------------------------------
 
-    def resolve_tool_schema(self, server_id: str, tool_name: str) -> Dict[str, Any]:
+    def resolve_tool_schema(self, server_id: str, tool_name: str) -> dict[str, Any]:
         """
         Return the JSON Schema for a tool's input arguments.
 
@@ -255,7 +255,7 @@ class SmitheryResolver:
 
         return input_schema
 
-    def list_tools(self, server_id: str) -> List[str]:
+    def list_tools(self, server_id: str) -> list[str]:
         """
         Return a list of tool names available on a server.
 
@@ -291,7 +291,7 @@ class SmitheryResolver:
 # Module-level convenience API
 # ---------------------------------------------------------------------------
 
-_default_resolver: Optional[SmitheryResolver] = None
+_default_resolver: SmitheryResolver | None = None
 
 
 def _get_default_resolver() -> SmitheryResolver:
@@ -302,7 +302,7 @@ def _get_default_resolver() -> SmitheryResolver:
     return _default_resolver
 
 
-def resolve_tool_schema(server_id: str, tool_name: str) -> Dict[str, Any]:
+def resolve_tool_schema(server_id: str, tool_name: str) -> dict[str, Any]:
     """
     Resolve the argument schema for a tool from the Smithery registry.
 
