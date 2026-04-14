@@ -156,8 +156,7 @@ class TestStdioTransport:
         mock_proc.wait = AsyncMock()
         t.process = mock_proc
 
-        with patch("asyncio.wait_for", new_callable=AsyncMock):
-            await t.close()
+        await t.close()
         assert t.process is None
 
 

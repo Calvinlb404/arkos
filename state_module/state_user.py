@@ -1,6 +1,7 @@
 import os
 import sys
 
+from state_module.base_state import StateOutput
 from state_module.state import State
 from state_module.state_registry import register_state
 
@@ -21,6 +22,9 @@ class StateUser(State):
         """Always ready to transition once user provides input."""
         return True
 
-    def run(self, context):
-        """No-op; the user state simply passes control back."""
-        return None
+    async def run(self, context, agent=None):
+        """Signals that control is being returned to the user."""
+        return StateOutput(
+            content="",
+            completion_signal="needs_input",
+        )

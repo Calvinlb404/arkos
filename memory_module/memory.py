@@ -157,7 +157,7 @@ class Memory:
                 self._pool.putconn(conn)
 
             # Store in mem0 in background (non-blocking)
-            if self.use_long_term and self._mem0:
+            if self.use_long_term and self._mem0 and message.content:
                 metadata = {
                     "user_id": self.user_id,
                     "session_id": self.session_id,
