@@ -8,8 +8,9 @@ Reads connection from DB_URL env var or constructs from POSTGRES_PASSWORD.
 
 import os
 import sys
-import psycopg2
 from pathlib import Path
+
+import psycopg2
 
 
 def get_connection_url():
@@ -45,7 +46,7 @@ def table_exists(conn, table_name):
 
 def run_migration(conn, migration_path):
     """Read and execute a migration SQL file."""
-    with open(migration_path, 'r') as f:
+    with open(migration_path) as f:
         sql = f.read()
 
     with conn.cursor() as cur:
