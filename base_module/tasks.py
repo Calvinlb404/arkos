@@ -5,8 +5,7 @@ Stubs for persistence; schema defined in db/migrations/0001_create_tasks_table.s
 
 import uuid
 from datetime import datetime
-from enum import Enum
-from typing import List, Optional
+from enum import StrEnum
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -14,7 +13,7 @@ from pydantic import BaseModel
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """Task status values matching db schema."""
     PENDING = "pending"
     RUNNING = "running"
@@ -26,8 +25,8 @@ class TaskStatus(str, Enum):
 class TaskRequest(BaseModel):
     """Request model for creating a task."""
     user_id: str
-    required_tools: Optional[List[str]] = None
-    context_payload: Optional[dict] = None
+    required_tools: list[str] | None = None
+    context_payload: dict | None = None
 
 
 class TaskResponse(BaseModel):
@@ -35,7 +34,7 @@ class TaskResponse(BaseModel):
     task_id: str
     user_id: str
     status: TaskStatus
-    required_tools: List[str]
+    required_tools: list[str]
     context_payload: dict
     created_at: datetime
     updated_at: datetime
@@ -43,7 +42,7 @@ class TaskResponse(BaseModel):
 
 class TaskListResponse(BaseModel):
     """Response model for task list with metadata."""
-    tasks: List[TaskResponse]
+    tasks: list[TaskResponse]
     total: int
 
 

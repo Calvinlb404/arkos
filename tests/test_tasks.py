@@ -1,10 +1,10 @@
 """Tests for task queue API endpoints (base_module/tasks.py)."""
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from base_module.tasks import router, TaskStatus, _tasks_store
-from fastapi import FastAPI
+from base_module.tasks import _tasks_store, router
 
 
 @pytest.fixture
