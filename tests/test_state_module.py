@@ -56,10 +56,14 @@ class TestStateUser:
         su = StateUser("u", {})
         assert su.check_transition_ready({}) is True
         assert su.check_transition_ready({"anything": "here"}) is True
-
-    def test_run_returns_none(self):
+    
+    @pytest.mark.asyncio
+    async def test_run_returns_none(self):
         su = StateUser("u", {})
-        assert su.run({}) is None
+        result = await su.run({})
+        assert result is not None
+        assert result.completion_signal == "needs_input"
+        assert result.content == ""
 
 
 # --- ReasonedOutput ---
