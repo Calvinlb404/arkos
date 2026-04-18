@@ -115,7 +115,7 @@ async def health_check():
 
     # Check TEI (text embeddings)
     try:
-        resp = requests.get("http://localhost:8081/health", timeout=2)
+        resp = requests.get("http://localhost:4444/health", timeout=2)
         services["tei"] = "running" if resp.status_code == 200 else "error"
     except Exception:
         services["tei"] = "not_running"
