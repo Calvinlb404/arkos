@@ -79,26 +79,31 @@ CI/CD is configured via GitHub Actions. All workflows live in `.github/workflows
 |-----|-------------|-------|
 | **Lint** | Checks code style and formatting | `ruff check .` and `ruff format --check .` |
 | **Test** | Runs unit tests with a Postgres service container | `pytest` with coverage |
-| **Build** | Builds the Docker image (no push) | `docker build` |
+| **Build & Push** | Builds the Docker image and pushes to GHCR | `docker buildx`, pushes to `ghcr.io/sgiark/arkos` |
 
-The build job only runs after lint and test both pass.
+On PRs, the build job builds without pushing (verification only). On pushes to `main`, the image is tagged with both the commit SHA and `latest` and pushed to GitHub Container Registry.
 
 ### Deploy (`deploy.yml`) -- runs on push to `main`
 
-Deploys to `ark.mit.edu` via SSH:
-1. Creates a tarball of the repo
-2. Uploads and extracts on the server
-3. Backs up the current deployment
-4. Installs dependencies and restarts the `arkos` systemd service
+Deploys the app as a Docker container on `ark.mit.edu`:
+1. SSHes in as the `kshitij` user (has docker group access, no sudo needed)
+2. Pulls the latest image from GHCR
+3. Records the current image tag (for rollback)
+4. Stops and removes the old container, starts a new one with `--network host` so it can reach SGLang/TEI/Postgres on localhost
 5. Runs a health check (pings `/health`)
 6. Runs a smoke test (sends a real chat request through the full stack)
-7. Rolls back automatically if any step fails
-8. Cleans up old backups (keeps last 3)
+7. Rolls back to the previous image automatically if any step fails
 
-**Setup required:**
-1. Add `SSH_PRIVATE_KEY` as a GitHub repo secret (Settings > Secrets and variables > Actions)
-2. Ensure the deploy user's public key is in `~/.ssh/authorized_keys` on `ark.mit.edu`
-3. Ensure a systemd service named `arkos` exists on the server
+**Setup required on `ark.mit.edu` (one-time):**
+1. Create `/home/kshitij/arkos/.env` with `DB_URL`, `OPENAI_API_KEY`, `BRAVE_API_KEY`, `GOOGLE_OAUTH_CREDENTIALS`, `HF_TOKEN`, etc.
+2. Either make the `ghcr.io/sgiark/arkos` package public (GitHub > repo > Packages > package settings), or run once as kshitij:
+   ```bash
+   echo $GITHUB_TOKEN | docker login ghcr.io -u <your-gh-username> --password-stdin
+   ```
+
+**Setup required on GitHub (one-time):**
+1. Add `SSH_PRIVATE_KEY` as a repo secret (Settings > Secrets and variables > Actions). This is the private key for the `kshitij` user on ark.mit.edu.
+2. Ensure the corresponding public key is in `~/.ssh/authorized_keys` on the server.
 
 ### Monitor (`monitor.yml`) -- runs every 30 minutes
 

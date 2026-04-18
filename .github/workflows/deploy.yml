@@ -1,38 +1,32 @@
 name: Deploy
 
-# Runs only on push to main (after CI passes) or manual trigger.
+# Deploys the ArkOS app as a Docker container on ark.mit.edu.
+# Uses the kshitij user (who has docker group access) — no sudo needed.
 #
 # BEFORE THIS WORKS, you need to configure:
-#   1. GitHub repo secret: SSH_PRIVATE_KEY (private key for the deploy user)
-#   2. On ark.mit.edu: the deploy user's ~/.ssh/authorized_keys must have the public key
-#   3. On ark.mit.edu: a systemd service named "arkos" (or adjust the restart command below)
+#   1. GitHub repo secret: SSH_PRIVATE_KEY (private key for kshitij@ark.mit.edu)
+#   2. On ark.mit.edu: the corresponding public key in ~/.ssh/authorized_keys
+#   3. On ark.mit.edu: /home/kshitij/arkos/.env file with DB_URL, OPENAI_API_KEY, etc.
+#   4. Either: make the ghcr.io/sgiark/arkos package public
+#      OR: run `docker login ghcr.io` once on ark.mit.edu as kshitij
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      environment:
-        description: "Deployment environment"
-        required: true
-        default: "production"
-        type: choice
-        options:
-          - staging
-          - production
 
 env:
   DEPLOY_HOST: ark.mit.edu
-  DEPLOY_USER: arkos
-  DEPLOY_PATH: /home/arkos/arkos
+  DEPLOY_USER: kshitij
+  IMAGE: ghcr.io/${{ github.repository }}
+  CONTAINER_NAME: arkos-app
   APP_PORT: 1112
 
 jobs:
   deploy:
-    name: Deploy to MIT SIPB
+    name: Deploy container to ark.mit.edu
     runs-on: ubuntu-latest
-    environment:
-      name: ${{ github.event.inputs.environment || 'production' }}
+    needs: []
 
     steps:
       - uses: actions/checkout@v4
@@ -44,93 +38,67 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ env.DEPLOY_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Create deployment package
+      - name: Pull and restart container
         run: |
-          tar --exclude='.git' \
-              --exclude='__pycache__' \
-              --exclude='*.pyc' \
-              --exclude='.env' \
-              --exclude='venv' \
-              --exclude='.venv' \
-              --exclude='model_module/models' \
-              --exclude='model_module/hub' \
-              --exclude='depricated' \
-              --exclude='.pytest_cache' \
-              --exclude='.coverage' \
-              --exclude='htmlcov' \
-              --exclude='.claude' \
-              -czf deploy.tar.gz . || true  # tar warns "file changed as we read it" which is non-fatal
-
-      - name: Upload to server
-        run: |
-          scp -i ~/.ssh/deploy_key deploy.tar.gz \
-            ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }}:/tmp/arkos-deploy.tar.gz
-
-      - name: Deploy application
-        run: |
-          ssh -i ~/.ssh/deploy_key ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} << 'DEPLOY_SCRIPT'
+          ssh -i ~/.ssh/deploy_key ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} \
+            IMAGE="${{ env.IMAGE }}" \
+            SHA="${{ github.sha }}" \
+            CONTAINER_NAME="${{ env.CONTAINER_NAME }}" \
+            APP_PORT="${{ env.APP_PORT }}" \
+            'bash -s' <<'DEPLOY_SCRIPT'
             set -e
 
-            DEPLOY_DIR="/home/arkos/arkos"
-            BACKUP_DIR="${DEPLOY_DIR}_backup_$(date +%Y%m%d_%H%M%S)"
+            echo "=== Pulling image ${IMAGE}:${SHA} ==="
+            docker pull "${IMAGE}:${SHA}"
 
-            echo "=== Starting deployment ==="
+            # Record current image for potential rollback
+            PREVIOUS=$(docker inspect --format='{{.Config.Image}}' "${CONTAINER_NAME}" 2>/dev/null || echo "")
+            echo "Previous image: ${PREVIOUS:-none}"
 
-            # Backup current deployment
-            if [ -d "$DEPLOY_DIR" ]; then
-              echo "Backing up current deployment to $BACKUP_DIR"
-              cp -r "$DEPLOY_DIR" "$BACKUP_DIR"
-            fi
+            echo "=== Stopping old container ==="
+            docker stop "${CONTAINER_NAME}" 2>/dev/null || true
+            docker rm "${CONTAINER_NAME}" 2>/dev/null || true
 
-            # Extract new deployment
-            echo "Extracting new deployment..."
-            mkdir -p "$DEPLOY_DIR"
-            cd "$DEPLOY_DIR"
-            tar -xzf /tmp/arkos-deploy.tar.gz
-            rm /tmp/arkos-deploy.tar.gz
+            echo "=== Starting new container ==="
+            # --network host lets the container reach SGLang/TEI/Postgres on localhost
+            # --env-file loads DB_URL, OPENAI_API_KEY, etc. from the user's .env
+            docker run -d \
+              --name "${CONTAINER_NAME}" \
+              --network host \
+              --restart unless-stopped \
+              --env-file /home/kshitij/arkos/.env \
+              "${IMAGE}:${SHA}"
 
-            # Restore .env from backup
-            if [ -f "${BACKUP_DIR}/.env" ]; then
-              cp "${BACKUP_DIR}/.env" "$DEPLOY_DIR/.env"
-            fi
-
-            # Install/update dependencies
-            echo "Installing dependencies..."
-            pip install --user -r requirements.txt --quiet
-
-            # Restart the application
-            echo "Restarting application..."
-            sudo systemctl restart arkos
-
-            # Health check
-            echo "Waiting for application to start..."
-            sleep 5
-            for i in {1..6}; do
-              if curl -sf http://localhost:1112/health > /dev/null; then
+            echo "=== Waiting for health check ==="
+            for i in {1..12}; do
+              if curl -sf --max-time 3 "http://localhost:${APP_PORT}/health" > /dev/null; then
                 echo "Health check passed!"
+                # Save previous image tag for rollback reference
+                echo "${PREVIOUS}" > /home/kshitij/arkos/.previous_image
                 exit 0
               fi
-              echo "Health check attempt $i failed, retrying..."
+              echo "Attempt $i/12 failed, waiting 5s..."
               sleep 5
             done
 
-            echo "Health check failed after 30 seconds!"
+            echo "Health check failed after 60s"
+            docker logs --tail 50 "${CONTAINER_NAME}" || true
             exit 1
           DEPLOY_SCRIPT
 
       - name: Smoke test
         run: |
-          ssh -i ~/.ssh/deploy_key ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} << 'SMOKE_SCRIPT'
+          ssh -i ~/.ssh/deploy_key ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} \
+            APP_PORT="${{ env.APP_PORT }}" \
+            'bash -s' <<'SMOKE_SCRIPT'
             set -e
             echo "=== Running smoke test ==="
 
-            # Send a real chat request through the full stack
-            response=$(curl -sf -X POST http://localhost:1112/v1/chat/completions \
+            response=$(curl -sf -X POST "http://localhost:${APP_PORT}/v1/chat/completions" \
               -H "Content-Type: application/json" \
               -d '{"model":"ark-agent","messages":[{"role":"user","content":"Say hello in one word."}]}' \
               --max-time 60)
 
-            # Verify we got a valid response with content
             echo "$response" | python3 -c "
             import sys, json
             data = json.load(sys.stdin)
@@ -144,28 +112,24 @@ jobs:
       - name: Rollback on failure
         if: failure()
         run: |
-          ssh -i ~/.ssh/deploy_key ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} << 'ROLLBACK_SCRIPT'
+          ssh -i ~/.ssh/deploy_key ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} \
+            CONTAINER_NAME="${{ env.CONTAINER_NAME }}" \
+            'bash -s' <<'ROLLBACK_SCRIPT'
             set -e
-            DEPLOY_DIR="/home/arkos/arkos"
-            BACKUP_DIR=$(ls -td ${DEPLOY_DIR}_backup_* 2>/dev/null | head -1)
-
-            if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
-              echo "=== Rolling back to $BACKUP_DIR ==="
-              rm -rf "$DEPLOY_DIR"
-              mv "$BACKUP_DIR" "$DEPLOY_DIR"
-              sudo systemctl restart arkos
-              echo "Rollback completed"
-            else
-              echo "No backup found for rollback!"
+            PREVIOUS=$(cat /home/kshitij/arkos/.previous_image 2>/dev/null || echo "")
+            if [ -z "$PREVIOUS" ]; then
+              echo "No previous image recorded — cannot roll back automatically"
               exit 1
             fi
-          ROLLBACK_SCRIPT
 
-      - name: Cleanup old backups
-        if: success()
-        run: |
-          ssh -i ~/.ssh/deploy_key ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} << 'CLEANUP_SCRIPT'
-            DEPLOY_DIR="/home/arkos/arkos"
-            ls -td ${DEPLOY_DIR}_backup_* 2>/dev/null | tail -n +4 | xargs rm -rf 2>/dev/null || true
-            echo "Cleanup completed"
-          CLEANUP_SCRIPT
+            echo "=== Rolling back to ${PREVIOUS} ==="
+            docker stop "${CONTAINER_NAME}" 2>/dev/null || true
+            docker rm "${CONTAINER_NAME}" 2>/dev/null || true
+            docker run -d \
+              --name "${CONTAINER_NAME}" \
+              --network host \
+              --restart unless-stopped \
+              --env-file /home/kshitij/arkos/.env \
+              "${PREVIOUS}"
+            echo "Rollback complete"
+          ROLLBACK_SCRIPT
