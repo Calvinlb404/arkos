@@ -51,7 +51,7 @@ Run these locally before opening a PR. CI runs them in parallel and blocks the D
 
 ## Pull requests
 
-PR should adhere to PULL_REQUEST_GUIDELINES.md
+PR should adhere to pull_request_template.md
 
 **Branch naming:** `type/short-description`
 
