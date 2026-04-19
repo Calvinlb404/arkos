@@ -642,10 +642,6 @@
       <span style="font-size:10px;color:var(--fg-mute);">enter to continue</span>
       <button id="loginBtn">enter &rarr;</button>
     </div>
-    <div class="backend-row">
-      backend
-      <input id="loginBackend" value="http://localhost:1113" />
-    </div>
   </div>
 </div>
 
@@ -659,8 +655,21 @@
 
 <script>
   // ---------- config ----------
+  // The frontend is served by the backend at /app/, so the backend URL is just
+  // the origin we were loaded from. config.yaml controls the port. If the page
+  // was opened as file://, we fall back to localhost:1113 for dev.
+  function resolveBackend() {
+    if (location.protocol.startsWith('http') && location.host) {
+      return location.origin;
+    }
+    return 'http://localhost:1113';
+  }
+
+  // Wipe any stale backend override from earlier runs so config.yaml wins.
+  localStorage.removeItem('ark_backend');
+
   const CONFIG = {
-    backend: (localStorage.getItem('ark_backend') || 'http://localhost:1113').replace(/\/$/, ''),
+    backend: resolveBackend(),
     token: localStorage.getItem('ark_token') || '',
     userId: localStorage.getItem('ark_user_id') || '',
     username: localStorage.getItem('ark_username') || '',

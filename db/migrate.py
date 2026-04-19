@@ -13,12 +13,37 @@ from pathlib import Path
 
 import psycopg2
 
+# Load the same .env the app uses before reading DB_URL.
+_PROJECT_ROOT = Path(__file__).parent.parent
+try:
+    from dotenv import load_dotenv  # type: ignore
+
+    load_dotenv(dotenv_path=_PROJECT_ROOT / ".env", override=False)
+except Exception:
+    pass
+
 
 def get_connection_url():
-    """Get Postgres connection URL from env or construct from POSTGRES_PASSWORD."""
+    """
+    Resolve the Postgres connection URL the same way the running backend does:
+      1. DB_URL env var (from shell or .env)
+      2. config_module.loader's ConfigLoader (substitutes ${DB_URL} from .env)
+      3. Constructed default from POSTGRES_* env vars
+    """
     db_url = os.environ.get("DB_URL")
     if db_url:
         return db_url
+
+    # Fall back to ConfigLoader so we stay in sync with base_module/app.py
+    try:
+        sys.path.insert(0, str(_PROJECT_ROOT))
+        from config_module.loader import config  # type: ignore
+
+        resolved = config.get("database.url")
+        if resolved and "${" not in str(resolved):
+            return resolved
+    except Exception as e:
+        print(f"(config_module loader unavailable: {e})", file=sys.stderr)
 
     password = os.environ.get("POSTGRES_PASSWORD", "postgres")
     host = os.environ.get("POSTGRES_HOST", "localhost")
