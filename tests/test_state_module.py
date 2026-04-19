@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from model_module.ArkModelNew import AIMessage, SystemMessage
+from state_module.base_state import StateOutput
 from state_module.state import State
 from state_module.state_ai import ReasonedOutput, StateAI
 from state_module.state_registry import STATE_REGISTRY, register_state
@@ -55,10 +56,14 @@ class TestStateUser:
         su = StateUser("u", {})
         assert su.check_transition_ready({}) is True
         assert su.check_transition_ready({"anything": "here"}) is True
-
-    def test_run_returns_none(self):
+    
+    @pytest.mark.asyncio
+    async def test_run_returns_none(self):
         su = StateUser("u", {})
-        assert su.run({}) is None
+        result = await su.run({})
+        assert result is not None
+        assert result.completion_signal == "needs_input"
+        assert result.content == ""
 
 
 # --- ReasonedOutput ---
@@ -129,7 +134,7 @@ class TestStateAI:
             mock_agent,
         )
 
-        assert isinstance(result, AIMessage)
+        assert isinstance(result, StateOutput)
         assert "Here is your answer." in result.content
         assert "step 1" in result.content
 
@@ -140,7 +145,7 @@ class TestStateAI:
         mock_agent.call_llm = AsyncMock(return_value=AIMessage(content="not valid json at all"))
 
         result = await sa.run([], mock_agent)
-        assert isinstance(result, AIMessage)
+        assert isinstance(result, StateOutput)
         assert result.content == "not valid json at all"
 
     @pytest.mark.asyncio
@@ -150,7 +155,7 @@ class TestStateAI:
         mock_agent.call_llm = AsyncMock(return_value=AIMessage(content=None))
 
         result = await sa.run([], mock_agent)
-        assert isinstance(result, AIMessage)
+        assert isinstance(result, StateOutput)
         assert "issue" in result.content.lower() or "try again" in result.content.lower()
 
     @pytest.mark.asyncio
@@ -255,7 +260,7 @@ class TestStateTool:
             mock_exec.return_value = "42"
 
             result = await st.run([], mock_agent)
-            assert isinstance(result, SystemMessage)
+            assert isinstance(result, StateOutput)
             assert "42" in result.content
 
 

@@ -129,7 +129,7 @@ class MCPClient:
         except Exception as e:
             logger.error(f"Failed to start MCP server '{self.config.name}': {e}")
             await self.stop()
-            raise
+            raise RuntimeError(f"Failed to start MCP server '{self.config.name}': {e}") from e
 
     async def stop(self) -> None:
         """Stop the MCP server connection gracefully."""

@@ -62,6 +62,7 @@ pip install -r requirements-dev.txt
 
 * `base_module/` -- FastAPI app, auth routes, CLI interfaces
 * `config_module/` -- YAML configuration loader
+* `db/` -- Postgress task table intializer
 * `model_module/` -- LLM inference wrapper (ArkModelLink)
 * `agent_module/` -- agent orchestration and state machine runner
 * `state_module/` -- state graph definitions (agent, tool, user states)
