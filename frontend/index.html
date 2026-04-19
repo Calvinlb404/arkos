@@ -1,0 +1,911 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ark. / buddy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --fg: #0a0a0a;
+    --fg-soft: #3a3a3a;
+    --fg-mute: #8a8a8a;
+    --fg-dim: #c8c8c8;
+    --bg: #fafaf9;
+    --bg-soft: #f2f1ee;
+    --bg-line: #e6e5e1;
+    --accent: #0a0a0a;
+    --ok: #0a8f3a;
+    --warn: #b58100;
+    --err: #b01e1e;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  }
+  [data-theme="dark"] {
+    --fg: #efefef;
+    --fg-soft: #cfcfcf;
+    --fg-mute: #8a8a8a;
+    --fg-dim: #3a3a3a;
+    --bg: #0a0a0a;
+    --bg-soft: #141414;
+    --bg-line: #1f1f1f;
+    --accent: #efefef;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: var(--mono);
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  /* ---------- layout ---------- */
+  .app {
+    display: grid;
+    grid-template-columns: 72px 1fr;
+    grid-template-rows: 52px 1fr 56px;
+    grid-template-areas:
+      "brand topbar"
+      "nav   main"
+      "nav   ambient";
+    height: 100vh;
+    width: 100vw;
+  }
+  .brand {
+    grid-area: brand;
+    display: flex;
+    align-items: center;
+    padding: 0 0 0 22px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    font-size: 18px;
+    font-family: var(--sans);
+    border-bottom: 1px solid var(--bg-line);
+  }
+  .brand .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-left: 6px; }
+  .brand .dot.off { background: var(--fg-dim); }
+  .brand .dot.err { background: var(--err); }
+
+  .topbar {
+    grid-area: topbar;
+    border-bottom: 1px solid var(--bg-line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    font-size: 11px;
+    color: var(--fg-mute);
+    letter-spacing: 0.04em;
+    text-transform: lowercase;
+  }
+  .topbar .status { display: flex; gap: 18px; align-items: center; }
+  .topbar .status b { color: var(--fg-soft); font-weight: 500; }
+  .topbar .right { display: flex; gap: 14px; align-items: center; }
+  .topbar .right a { color: var(--fg-mute); text-decoration: none; cursor: pointer; }
+  .topbar .right a:hover { color: var(--fg); }
+  .topbar .right .pill {
+    border: 1px solid var(--bg-line);
+    padding: 3px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+  }
+
+  /* ---------- sidebar (vertical labels like mrk.) ---------- */
+  nav.side {
+    grid-area: nav;
+    border-right: 1px solid var(--bg-line);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 28px 0 20px 0;
+    gap: 28px;
+  }
+  nav.side a {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    text-orientation: mixed;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: var(--fg-mute);
+    text-decoration: none;
+    cursor: pointer;
+    padding: 6px 2px;
+    border-left: 1px solid transparent;
+  }
+  nav.side a:hover { color: var(--fg); }
+  nav.side a.active { color: var(--fg); border-left-color: var(--fg); }
+  nav.side .spacer { flex: 1; }
+  nav.side .mode {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    font-size: 10px;
+    color: var(--fg-mute);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  /* ---------- main ---------- */
+  main {
+    grid-area: main;
+    overflow-y: auto;
+    padding: 40px 48px 60px 48px;
+    position: relative;
+  }
+  .hero {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 44px;
+  }
+  .hero h1 {
+    margin: 0;
+    font-family: var(--mono);
+    font-weight: 400;
+    font-size: 22px;
+    letter-spacing: -0.02em;
+  }
+  .hero h1 .cursor { display: inline-block; margin-left: 2px; animation: blink 1.1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .hero .sub {
+    color: var(--fg-mute);
+    font-size: 11px;
+    max-width: 460px;
+    text-align: right;
+  }
+
+  .zones {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1fr;
+    gap: 28px;
+  }
+  section.zone {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+  section.zone > header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--bg-line);
+    margin-bottom: 6px;
+  }
+  section.zone > header h2 {
+    font-size: 10px;
+    margin: 0;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+  section.zone > header .count {
+    color: var(--fg-mute);
+    font-size: 10px;
+  }
+
+  /* ---------- cards ---------- */
+  .card {
+    border: 1px solid var(--bg-line);
+    background: var(--bg);
+    padding: 14px 14px 12px 14px;
+    transition: border-color .15s ease, transform .25s ease, opacity .25s ease;
+    animation: fold-in .35s ease both;
+  }
+  @keyframes fold-in {
+    from { opacity: 0; transform: translateY(-6px) scaleY(0.94); transform-origin: top; }
+    to { opacity: 1; transform: none; }
+  }
+  .card:hover { border-color: var(--fg-mute); }
+  .card .meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 10px;
+    color: var(--fg-mute);
+    margin-bottom: 8px;
+    letter-spacing: 0.04em;
+  }
+  .card .meta .tag {
+    padding: 2px 6px;
+    border: 1px solid var(--bg-line);
+    border-radius: 8px;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-soft);
+  }
+  .card .title {
+    font-size: 13px;
+    color: var(--fg);
+    margin-bottom: 6px;
+    line-height: 1.4;
+  }
+  .card .plan {
+    font-size: 11px;
+    color: var(--fg-soft);
+    background: var(--bg-soft);
+    border-left: 2px solid var(--fg-dim);
+    padding: 8px 10px;
+    margin: 8px 0 10px 0;
+    white-space: pre-wrap;
+    font-family: var(--mono);
+  }
+  .card .actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 6px;
+  }
+  button.mini {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    border: 1px solid var(--bg-line);
+    background: var(--bg);
+    color: var(--fg-soft);
+    padding: 5px 10px;
+    cursor: pointer;
+    text-transform: lowercase;
+  }
+  button.mini:hover { border-color: var(--fg); color: var(--fg); }
+  button.mini.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  button.mini.primary:hover { opacity: .85; }
+
+  .task-row, .watch-row {
+    border: 1px solid var(--bg-line);
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    animation: fold-in .35s ease both;
+  }
+  .task-row .label, .watch-row .label { display: flex; gap: 10px; align-items: center; min-width: 0; }
+  .task-row .spin {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--warn);
+    box-shadow: 0 0 0 0 rgba(181,129,0,.6);
+    animation: pulse 1.6s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(181,129,0,.55); }
+    70% { box-shadow: 0 0 0 8px rgba(181,129,0,0); }
+    100% { box-shadow: 0 0 0 0 rgba(181,129,0,0); }
+  }
+  .task-row .text, .watch-row .text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-soft);
+  }
+  .task-row .when, .watch-row .when {
+    color: var(--fg-mute);
+    font-size: 10px;
+    flex-shrink: 0;
+    margin-left: 10px;
+  }
+
+  .empty {
+    padding: 20px 0;
+    color: var(--fg-mute);
+    font-size: 11px;
+    text-align: left;
+    border: 1px dashed var(--bg-line);
+    padding: 20px;
+    text-align: center;
+    font-style: italic;
+  }
+
+  /* ---------- ambient input (novel chat) ---------- */
+  .ambient {
+    grid-area: ambient;
+    border-top: 1px solid var(--bg-line);
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    padding: 0 24px 0 48px;
+    gap: 12px;
+    position: relative;
+  }
+  .ambient .prompt {
+    color: var(--fg-mute);
+    font-family: var(--mono);
+    font-size: 12px;
+    user-select: none;
+    letter-spacing: 0.02em;
+  }
+  .ambient input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 14px;
+    padding: 0;
+  }
+  .ambient .cursor {
+    color: var(--fg);
+    animation: blink 1.1s step-end infinite;
+    font-size: 14px;
+    font-family: var(--mono);
+  }
+  .ambient .hint {
+    color: var(--fg-mute);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    display: flex;
+    gap: 14px;
+    align-items: center;
+  }
+  .ambient .hint kbd {
+    border: 1px solid var(--bg-line);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-family: var(--mono);
+    color: var(--fg-soft);
+  }
+
+  /* Floating streaming bubble that appears above ambient and folds into a card */
+  .floater-layer {
+    pointer-events: none;
+    position: absolute;
+    left: 48px;
+    right: 24px;
+    bottom: 56px;
+    z-index: 50;
+  }
+  .floater {
+    pointer-events: auto;
+    max-width: 640px;
+    margin-left: auto;
+    margin-right: auto;
+    background: var(--bg);
+    border: 1px solid var(--fg);
+    padding: 12px 14px;
+    font-size: 12px;
+    color: var(--fg);
+    box-shadow: 0 20px 40px -24px rgba(0,0,0,.3);
+    transform-origin: bottom center;
+    animation: rise .3s ease both;
+    white-space: pre-wrap;
+    line-height: 1.55;
+    position: relative;
+  }
+  .floater .you {
+    color: var(--fg-mute);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+    display: block;
+  }
+  .floater.folding { animation: fold-away .5s ease forwards; }
+  @keyframes rise {
+    from { transform: translateY(14px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  @keyframes fold-away {
+    to { transform: translateY(-10px) scaleY(0.2); opacity: 0; }
+  }
+
+  /* history drawer */
+  .history-toggle {
+    position: absolute;
+    top: -14px;
+    right: 24px;
+    background: var(--bg);
+    border: 1px solid var(--bg-line);
+    padding: 2px 10px;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    color: var(--fg-mute);
+    cursor: pointer;
+    text-transform: uppercase;
+  }
+  .history-toggle:hover { color: var(--fg); border-color: var(--fg); }
+
+  .drawer {
+    position: fixed;
+    right: 0;
+    top: 52px;
+    bottom: 56px;
+    width: 380px;
+    background: var(--bg);
+    border-left: 1px solid var(--bg-line);
+    transform: translateX(100%);
+    transition: transform .25s ease;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--bg-line);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-mute);
+  }
+  .drawer header .close { cursor: pointer; }
+  .drawer .log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .msg { font-size: 12px; line-height: 1.55; }
+  .msg .who { font-size: 9px; color: var(--fg-mute); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 3px; }
+  .msg.user .body { color: var(--fg); }
+  .msg.ark .body { color: var(--fg-soft); white-space: pre-wrap; }
+
+  /* scrollbars subtle */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: var(--bg-line); }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  @media (max-width: 960px) {
+    .zones { grid-template-columns: 1fr; }
+    .app { grid-template-columns: 48px 1fr; }
+    main { padding: 24px 20px 40px 20px; }
+    .ambient { padding-left: 20px; }
+    .floater-layer { left: 20px; right: 20px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="brand">ark<span class="dot off" id="statusDot" title="backend status"></span></div>
+
+  <div class="topbar">
+    <div class="status">
+      <span>buddy <b>v1</b></span>
+      <span>user <b id="userLabel">arkos-agent</b></span>
+      <span id="backendLabel">localhost:1113</span>
+    </div>
+    <div class="right">
+      <span class="pill" id="approvalsPill">0 pending</span>
+      <a id="settingsBtn" title="settings">settings</a>
+    </div>
+  </div>
+
+  <nav class="side">
+    <a class="active" data-view="desk">desk</a>
+    <a data-view="tasks">tasks</a>
+    <a data-view="watching">watching</a>
+    <a data-view="approvals">approvals</a>
+    <a data-view="chat">chat</a>
+    <div class="spacer"></div>
+    <span class="mode" id="themeToggle">dark mode</span>
+  </nav>
+
+  <main id="main">
+    <div class="hero">
+      <h1>buddy's desk<span class="cursor">_</span></h1>
+      <div class="sub">
+        your digital life, handled in the background. buddy watches, triages, and workshops plans for your approval.
+      </div>
+    </div>
+
+    <div class="zones">
+      <section class="zone" id="zone-approvals">
+        <header>
+          <h2>pending approvals</h2>
+          <span class="count" id="approvalsCount">0</span>
+        </header>
+        <div class="list" id="approvalsList"></div>
+      </section>
+
+      <section class="zone" id="zone-tasks">
+        <header>
+          <h2>active tasks</h2>
+          <span class="count" id="tasksCount">0</span>
+        </header>
+        <div class="list" id="tasksList"></div>
+      </section>
+
+      <section class="zone" id="zone-watching">
+        <header>
+          <h2>watching</h2>
+          <span class="count" id="watchingCount">0</span>
+        </header>
+        <div class="list" id="watchingList"></div>
+      </section>
+    </div>
+  </main>
+
+  <div class="ambient">
+    <div class="floater-layer" id="floaterLayer">
+      <button class="history-toggle" id="historyToggle">history</button>
+    </div>
+    <span class="prompt">ark&gt;</span>
+    <input id="inputBox" autocomplete="off" spellcheck="false" placeholder="tell buddy what to do. or just think out loud." />
+    <span class="cursor" id="cursor">_</span>
+    <div class="hint">
+      <span><kbd>/</kbd> focus</span>
+      <span><kbd>enter</kbd> send</span>
+      <span><kbd>esc</kbd> clear</span>
+    </div>
+  </div>
+</div>
+
+<aside class="drawer" id="drawer">
+  <header>
+    <span>conversation log</span>
+    <span class="close" id="drawerClose">close</span>
+  </header>
+  <div class="log" id="log"></div>
+</aside>
+
+<script>
+  // ---------- config ----------
+  const CONFIG = {
+    backend: (localStorage.getItem('ark_backend') || 'http://localhost:1113').replace(/\/$/, ''),
+    userId: localStorage.getItem('ark_user') || 'arkos-agent',
+    model: 'ark-agent',
+  };
+  document.getElementById('userLabel').textContent = CONFIG.userId;
+  document.getElementById('backendLabel').textContent = CONFIG.backend.replace(/^https?:\/\//, '');
+
+  // ---------- state (mock surfaces + real backend chat) ----------
+  const state = {
+    approvals: [
+      {
+        id: 'ap1',
+        source: 'gmail',
+        title: 'reply to Prof. Rivera about Thursday meeting',
+        plan: '1. confirm 3pm thursday in rm 32-g882\n2. attach the draft you wrote sunday\n3. cc Angela',
+      },
+      {
+        id: 'ap2',
+        source: 'linear',
+        title: 'move ARK-142 to "in review" and tag reviewer',
+        plan: '1. move ARK-142 to "in review"\n2. assign reviewer: nathaniel\n3. post summary as comment',
+      },
+    ],
+    tasks: [
+      { id: 't1', text: 'digesting 14 unread emails from the last 4 hours', when: '2m' },
+      { id: 't2', text: 'drafting weekly update for team buddies', when: '8m' },
+    ],
+    watching: [
+      { id: 'w1', text: 'linear.app / team ark', when: 'every 5m' },
+      { id: 'w2', text: 'mail.google.com / inbox', when: 'live' },
+      { id: 'w3', text: 'calendar.google.com', when: '15m' },
+    ],
+    history: [],
+  };
+
+  // ---------- render ----------
+  function render() {
+    const a = document.getElementById('approvalsList');
+    a.innerHTML = '';
+    if (!state.approvals.length) {
+      a.innerHTML = '<div class="empty">no plans waiting on you</div>';
+    } else {
+      for (const ap of state.approvals) {
+        const el = document.createElement('div');
+        el.className = 'card';
+        el.innerHTML = `
+          <div class="meta">
+            <span class="tag">${ap.source}</span>
+            <span>approval</span>
+          </div>
+          <div class="title">${escapeHtml(ap.title)}</div>
+          <div class="plan">${escapeHtml(ap.plan)}</div>
+          <div class="actions">
+            <button class="mini" data-decline="${ap.id}">decline</button>
+            <button class="mini primary" data-approve="${ap.id}">approve</button>
+          </div>
+        `;
+        a.appendChild(el);
+      }
+    }
+
+    const t = document.getElementById('tasksList');
+    t.innerHTML = '';
+    if (!state.tasks.length) {
+      t.innerHTML = '<div class="empty">buddy is idle</div>';
+    } else {
+      for (const task of state.tasks) {
+        const el = document.createElement('div');
+        el.className = 'task-row';
+        el.innerHTML = `
+          <div class="label">
+            <span class="spin"></span>
+            <span class="text">${escapeHtml(task.text)}</span>
+          </div>
+          <span class="when">${escapeHtml(task.when)}</span>
+        `;
+        t.appendChild(el);
+      }
+    }
+
+    const w = document.getElementById('watchingList');
+    w.innerHTML = '';
+    if (!state.watching.length) {
+      w.innerHTML = '<div class="empty">not watching anything yet</div>';
+    } else {
+      for (const ws of state.watching) {
+        const el = document.createElement('div');
+        el.className = 'watch-row';
+        el.innerHTML = `
+          <div class="label"><span class="text">${escapeHtml(ws.text)}</span></div>
+          <span class="when">${escapeHtml(ws.when)}</span>
+        `;
+        w.appendChild(el);
+      }
+    }
+
+    document.getElementById('approvalsCount').textContent = state.approvals.length;
+    document.getElementById('tasksCount').textContent = state.tasks.length;
+    document.getElementById('watchingCount').textContent = state.watching.length;
+    document.getElementById('approvalsPill').textContent = state.approvals.length + ' pending';
+
+    renderLog();
+  }
+
+  function renderLog() {
+    const log = document.getElementById('log');
+    log.innerHTML = '';
+    for (const m of state.history) {
+      const row = document.createElement('div');
+      row.className = 'msg ' + m.role;
+      row.innerHTML = `<div class="who">${m.role === 'user' ? 'you' : 'ark'}</div><div class="body">${escapeHtml(m.content)}</div>`;
+      log.appendChild(row);
+    }
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // ---------- event wiring ----------
+  document.addEventListener('click', (e) => {
+    const ap = e.target.closest('[data-approve]');
+    const dc = e.target.closest('[data-decline]');
+    if (ap) {
+      const id = ap.dataset.approve;
+      const item = state.approvals.find((x) => x.id === id);
+      state.approvals = state.approvals.filter((x) => x.id !== id);
+      state.tasks.unshift({ id: 'done-' + id, text: 'executing: ' + (item?.title || 'approved plan'), when: 'now' });
+      render();
+      return;
+    }
+    if (dc) {
+      const id = dc.dataset.decline;
+      state.approvals = state.approvals.filter((x) => x.id !== id);
+      render();
+      return;
+    }
+  });
+
+  document.getElementById('themeToggle').addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme');
+    if (cur === 'dark') {
+      document.documentElement.removeAttribute('data-theme');
+      document.getElementById('themeToggle').textContent = 'dark mode';
+    } else {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      document.getElementById('themeToggle').textContent = 'light mode';
+    }
+  });
+
+  // keyboard shortcuts
+  const input = document.getElementById('inputBox');
+  const cursor = document.getElementById('cursor');
+  input.addEventListener('focus', () => (cursor.style.opacity = 0));
+  input.addEventListener('blur', () => (cursor.style.opacity = 1));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && document.activeElement !== input) {
+      e.preventDefault();
+      input.focus();
+    } else if (e.key === 'Escape') {
+      input.value = '';
+      input.blur();
+      document.getElementById('drawer').classList.remove('open');
+    }
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && input.value.trim()) {
+      sendMessage(input.value.trim());
+      input.value = '';
+    }
+  });
+
+  document.getElementById('historyToggle').addEventListener('click', () => {
+    document.getElementById('drawer').classList.toggle('open');
+  });
+  document.getElementById('drawerClose').addEventListener('click', () => {
+    document.getElementById('drawer').classList.remove('open');
+  });
+
+  document.getElementById('settingsBtn').addEventListener('click', () => {
+    const b = prompt('backend url:', CONFIG.backend);
+    if (b) { localStorage.setItem('ark_backend', b); }
+    const u = prompt('user id:', CONFIG.userId);
+    if (u) { localStorage.setItem('ark_user', u); }
+    location.reload();
+  });
+
+  // side nav scrolls to zone
+  document.querySelectorAll('nav.side a[data-view]').forEach((a) => {
+    a.addEventListener('click', () => {
+      document.querySelectorAll('nav.side a').forEach((x) => x.classList.remove('active'));
+      a.classList.add('active');
+      const view = a.dataset.view;
+      if (view === 'chat') {
+        document.getElementById('drawer').classList.add('open');
+        input.focus();
+      } else if (view === 'approvals') {
+        document.getElementById('zone-approvals').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else if (view === 'tasks') {
+        document.getElementById('zone-tasks').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else if (view === 'watching') {
+        document.getElementById('zone-watching').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else {
+        document.getElementById('main').scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    });
+  });
+
+  // ---------- backend ----------
+  async function checkHealth() {
+    const dot = document.getElementById('statusDot');
+    try {
+      const r = await fetch(CONFIG.backend + '/health', { method: 'GET' });
+      if (!r.ok) throw new Error('bad status');
+      const j = await r.json();
+      dot.classList.remove('off', 'err');
+      dot.title = 'connected / llm ' + (j.llm_server || 'unknown');
+    } catch (err) {
+      dot.classList.remove('off');
+      dot.classList.add('err');
+      dot.title = 'backend unreachable at ' + CONFIG.backend;
+    }
+  }
+  checkHealth();
+  setInterval(checkHealth, 15000);
+
+  // ---------- chat: novel streaming with fold-into-card ----------
+  let currentFloater = null;
+
+  function showUserFloater(text) {
+    const layer = document.getElementById('floaterLayer');
+    const f = document.createElement('div');
+    f.className = 'floater';
+    f.innerHTML = '<span class="you">you</span>' + escapeHtml(text);
+    layer.appendChild(f);
+    setTimeout(() => foldAndRemove(f), 1400);
+  }
+
+  function openAssistantFloater() {
+    const layer = document.getElementById('floaterLayer');
+    const f = document.createElement('div');
+    f.className = 'floater';
+    f.innerHTML = '<span class="you">ark</span><span class="content"></span>';
+    layer.appendChild(f);
+    return f;
+  }
+
+  function foldAndRemove(el) {
+    if (!el) return;
+    el.classList.add('folding');
+    setTimeout(() => el.remove(), 520);
+  }
+
+  function classifyIntent(userText, reply) {
+    const t = (userText + ' ' + reply).toLowerCase();
+    if (/(watch|monitor|keep an eye|check (on )?)/.test(t)) return 'watching';
+    if (/(approv|should i|review|ok to|workshop|plan:)/.test(t)) return 'approvals';
+    return 'tasks';
+  }
+
+  async function sendMessage(text) {
+    state.history.push({ role: 'user', content: text });
+    showUserFloater(text);
+
+    const floater = openAssistantFloater();
+    currentFloater = floater;
+    const contentEl = floater.querySelector('.content');
+
+    let reply = '';
+    try {
+      const res = await fetch(CONFIG.backend + '/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-ID': CONFIG.userId,
+        },
+        body: JSON.stringify({
+          model: CONFIG.model,
+          stream: true,
+          user: CONFIG.userId,
+          messages: state.history.map((m) => ({ role: m.role === 'ark' ? 'assistant' : 'user', content: m.content })),
+        }),
+      });
+
+      if (!res.ok || !res.body) throw new Error('stream failed: ' + res.status);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const raw of lines) {
+          const line = raw.trim();
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload === '[DONE]') continue;
+          try {
+            const j = JSON.parse(payload);
+            const delta = j.choices?.[0]?.delta?.content;
+            if (delta) {
+              reply += delta;
+              contentEl.textContent = reply;
+            }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      reply = '[buddy offline: ' + (err.message || err) + ']\nstart the backend: python base_module/app.py';
+      contentEl.textContent = reply;
+    }
+
+    state.history.push({ role: 'ark', content: reply });
+    renderLog();
+
+    // fold the floater into the appropriate dashboard zone as a new card
+    setTimeout(() => {
+      const intent = classifyIntent(text, reply);
+      if (intent === 'watching') {
+        state.watching.unshift({ id: 'w-' + Date.now(), text: summarize(text), when: 'just now' });
+      } else if (intent === 'approvals') {
+        state.approvals.unshift({
+          id: 'ap-' + Date.now(),
+          source: 'chat',
+          title: summarize(text),
+          plan: reply.split('\n').slice(0, 6).join('\n'),
+        });
+      } else {
+        state.tasks.unshift({ id: 't-' + Date.now(), text: summarize(text), when: 'just now' });
+      }
+      render();
+      foldAndRemove(floater);
+    }, 1400);
+  }
+
+  function summarize(s) {
+    return s.length > 80 ? s.slice(0, 78) + '…' : s;
+  }
+
+  render();
+</script>
+</body>
+</html>
+
