@@ -6,7 +6,9 @@ import uuid
 
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 # Standard boilerplate for module imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -23,9 +25,27 @@ from tool_module.token_store import UserTokenStore
 from tool_module.tool_call import MCPToolManager
 
 app = FastAPI(title="ArkOS Agent API", version="1.0.0")
+
+# CORS so the frontend can talk to this API from file:// or another port during demos
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(tasks_router)
+
+# Serve the ark frontend at /app/ if the folder exists
+_FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
+if os.path.isdir(_FRONTEND_DIR):
+    app.mount("/app", StaticFiles(directory=_FRONTEND_DIR, html=True), name="frontend")
+    print(f"[ark] serving frontend from {_FRONTEND_DIR} at /app/")
+else:
+    print(f"[ark] no frontend folder at {_FRONTEND_DIR}; /app route disabled")
 
 
 # Initialize the agent and dependencies once
