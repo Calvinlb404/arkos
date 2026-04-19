@@ -21,6 +21,7 @@ from memory_module.memory import Memory
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage
 from state_module.state_handler import StateHandler
 from tool_module.tool_call import MCPToolManager
+from tool_module.smithery import AuthRequiredError
 
 app = FastAPI(title="ArkOS Agent API", version="1.0.0")
 
@@ -86,26 +87,77 @@ agent = Agent(
 )
 
 
-def format_tools_for_system_prompt(tools: dict) -> str:
+def format_tools_for_system_prompt(tools_by_server: dict, deferred: list[dict] | None = None) -> str:
     """
-    tools: {tool_name: ToolDefinition}
-    ToolDefinition is whatever MCPToolManager.list_all_tools() returns.
+    tools_by_server: {server_name: {tool_name: tool_spec}} from SmitheryManager.list_all_tools().
+    deferred: optional list of {'service', 'name', 'setup_url'} for per-user
+        OAuth services that exist in config but aren't connected for anyone
+        yet. Surfacing them in the system prompt lets buddy tell the user
+        'Linear exists, you just need to connect it' instead of falsely
+        claiming no access.
     """
-    lines = []
-    lines.append("You have access to the following tools.")
-    lines.append("Use them when appropriate. Only call tools that are listed below.")
-    lines.append("")
+    lines: list[str] = []
 
-    for name, tool in tools.items():
-        lines.append(f"Tool name: {name}")
-        if getattr(tool, "description", None):
-            lines.append(f"Description: {tool.description}")
-        if getattr(tool, "input_schema", None):
-            lines.append("Input schema:")
-            lines.append(str(tool.input_schema))
+    has_any = bool(tools_by_server) or bool(deferred)
+    if not has_any:
+        return "You do not currently have any external tools available."
+
+    if tools_by_server:
+        lines.append("You have access to the following tools. Only call tools listed here.")
+        lines.append("")
+        for server_name, server_tools in tools_by_server.items():
+            if not server_tools:
+                continue
+            lines.append(f"# Service: {server_name}")
+            for tool_name, tool in server_tools.items():
+                lines.append(f"Tool name: {tool_name}")
+                if isinstance(tool, dict):
+                    desc = tool.get("description") or ""
+                    schema = tool.get("inputSchema") or tool.get("input_schema")
+                else:
+                    desc = getattr(tool, "description", "") or ""
+                    schema = getattr(tool, "input_schema", None)
+                if desc:
+                    lines.append(f"Description: {desc.strip()}")
+                if schema:
+                    lines.append("Input schema:")
+                    lines.append(str(schema))
+                lines.append("")
+
+    if deferred:
+        lines.append("The following services are configured but not yet connected for the current user.")
+        lines.append("You cannot call their tools until the user completes the Smithery OAuth flow.")
+        lines.append("If the user asks for something that needs one of these, tell them it needs to be connected first and share the setup URL:")
+        lines.append("")
+        for svc in deferred:
+            nm = svc.get("name") or svc.get("service")
+            url = svc.get("setup_url")
+            if url:
+                lines.append(f"- {nm} (service id: {svc.get('service')}): connect via {url}")
+            else:
+                lines.append(f"- {nm} (service id: {svc.get('service')}): needs connection; direct the user to the ark connections panel")
         lines.append("")
 
     return "\n".join(lines)
+
+
+def _list_deferred_services() -> list[dict]:
+    """Read config for per-user OAuth services (requires_auth: true) so we
+    can advertise them in the system prompt even before anyone connects."""
+    if not tool_manager:
+        return []
+    out: list[dict] = []
+    for server_name, spec in (tool_manager.servers or {}).items():
+        if not spec.get("requires_auth"):
+            continue
+        out.append(
+            {
+                "service": server_name,
+                "name": spec.get("name") or server_name,
+                "setup_url": None,  # real setup URL is minted on first per-user connect
+            }
+        )
+    return out
 
 
 @app.on_event("startup")
@@ -116,13 +168,23 @@ async def startup():
     if tool_manager:
         await tool_manager.initialize_servers()
 
-        print(f"Initialized {len(tool_manager.clients)} MCP servers")
         # Cache tools on agent
         agent.available_tools = await tool_manager.list_all_tools()
-        print(f"Initialized {len(tool_manager.clients)} MCP servers")
-        print(f"Available tools: {list(agent.available_tools.keys())}")
 
-        tool_prompt = format_tools_for_system_prompt(agent.available_tools)
+        shared_tools = sum(len(tools) for tools in agent.available_tools.values())
+        shared_servers = [s for s, tools in agent.available_tools.items() if tools]
+        deferred = _list_deferred_services()
+
+        print(
+            f"[ark] MCP init: {len(shared_servers)} shared server(s) connected "
+            f"({shared_tools} tool(s)); {len(deferred)} per-user service(s) deferred"
+        )
+        if shared_servers:
+            print(f"[ark]   shared: {', '.join(shared_servers)}")
+        if deferred:
+            print(f"[ark]   deferred (needs user OAuth): {', '.join(s['service'] for s in deferred)}")
+
+        tool_prompt = format_tools_for_system_prompt(agent.available_tools, deferred=deferred)
 
         agent.system_prompt = base_system_prompt + "\n\n" + tool_prompt if base_system_prompt else tool_prompt
     else:
@@ -137,6 +199,209 @@ async def startup():
             print(f"[ark] resumed {resumed} orphan task(s) after restart")
     except Exception as e:
         print(f"[ark] task orphan sweep failed: {e}")
+
+
+@app.get("/services")
+async def list_services(request: Request):
+    """
+    Returns the connection state of every per-user (requires_auth) service
+    for the calling user, plus every no-auth shared service. The frontend
+    uses this to render a connections panel with Smithery setup links.
+    """
+    user_id = request.headers.get("X-User-ID") or config.get("memory.user_id")
+
+    if not tool_manager:
+        return JSONResponse(content={"user_id": user_id, "shared": [], "per_user": []})
+
+    # Shared (no-auth) services are whatever initialize_servers() connected.
+    shared = []
+    for server_name in (tool_manager._shared_tools or {}).keys():
+        shared.append(
+            {
+                "service": server_name,
+                "name": (tool_manager.servers.get(server_name, {}) or {}).get("name", server_name),
+                "connected": True,
+            }
+        )
+
+    per_user = [
+        {"service": svc, **info}
+        for svc, info in tool_manager.get_user_service_status(user_id).items()
+    ]
+
+    return JSONResponse(content={"user_id": user_id, "shared": shared, "per_user": per_user})
+
+
+async def _refresh_system_prompt() -> None:
+    """Rebuild agent.system_prompt from the current tool_manager state.
+    Called after a connection change so buddy picks up the new tools."""
+    if not tool_manager:
+        return
+    agent.available_tools = await tool_manager.list_all_tools()
+    deferred = _list_deferred_services()
+    tool_prompt = format_tools_for_system_prompt(agent.available_tools, deferred=deferred)
+    base = (config.get("app.system_prompt") or "").strip()
+    agent.system_prompt = base + "\n\n" + tool_prompt if base else tool_prompt
+
+
+def _callback_return_url(request: Request, service: str, user_id: str) -> str:
+    """Build the URL Smithery should redirect back to after OAuth.
+
+    We derive the scheme+host from the request itself so this works whether
+    the app is served at localhost:1114, a reverse-proxied hostname, or
+    anywhere else. The user_id is encoded into the URL so the callback can
+    verify the connection for the right user without needing a session.
+    """
+    from urllib.parse import urlencode
+
+    scheme = request.headers.get("X-Forwarded-Proto") or request.url.scheme
+    host = request.headers.get("X-Forwarded-Host") or request.url.netloc
+    qs = urlencode({"user_id": user_id})
+    return f"{scheme}://{host}/oauth/callback/{service}?{qs}"
+
+
+@app.post("/services/{service}/connect")
+async def connect_service(service: str, request: Request):
+    """
+    Trigger (or re-trigger) the per-user Smithery OAuth flow for a given
+    service. Returns the setup_url if Smithery needs the user to authorize,
+    or status='connected' if the connection is already live.
+
+    The setup_url returned here already has a Smithery-side returnUrl baked
+    in pointing at /oauth/callback/{service}, so when the user finishes
+    OAuth on Smithery's hosted page they get bounced back into the ark app.
+    """
+    user_id = request.headers.get("X-User-ID") or config.get("memory.user_id")
+
+    if not tool_manager:
+        return JSONResponse(
+            content={"error": "tool manager disabled"},
+            status_code=503,
+        )
+    if service not in (tool_manager.servers or {}):
+        return JSONResponse(
+            content={"error": f"unknown service '{service}'"},
+            status_code=404,
+        )
+
+    import aiohttp  # local import; the rest of the file stays light
+
+    return_url = _callback_return_url(request, service, user_id)
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            await tool_manager._ensure_user_server(session, user_id, service, return_url=return_url)
+        except Exception as e:
+            # AuthRequiredError is the happy path here: it carries setup_url
+            setup_url = getattr(e, "setup_url", None)
+            if setup_url:
+                return JSONResponse(
+                    content={
+                        "service": service,
+                        "status": getattr(e, "state", "auth_required"),
+                        "setup_url": setup_url,
+                        "return_url": return_url,
+                    }
+                )
+            return JSONResponse(
+                content={"service": service, "status": "error", "error": str(e)},
+                status_code=500,
+            )
+
+    await _refresh_system_prompt()
+    return JSONResponse(content={"service": service, "status": "connected"})
+
+
+@app.post("/services/{service}/disconnect")
+async def disconnect_service(service: str, request: Request):
+    """Forget a per-user connection client-side. Smithery retains the token
+    until the user revokes it there; we just stop tracking/surfacing it."""
+    user_id = request.headers.get("X-User-ID") or config.get("memory.user_id")
+    if not tool_manager:
+        return JSONResponse(content={"error": "tool manager disabled"}, status_code=503)
+
+    by_server = tool_manager._user_tools.get(user_id) or {}
+    by_server.pop(service, None)
+    tool_manager._pending.get(user_id, {}).pop(service, None)
+    # rebuild the tool registry without the disconnected service's tools
+    tool_manager._tool_registry = {
+        tname: sname
+        for tname, sname in tool_manager._tool_registry.items()
+        if sname != service or sname in tool_manager._shared_tools
+    }
+    await _refresh_system_prompt()
+    return JSONResponse(content={"service": service, "status": "disconnected"})
+
+
+@app.get("/oauth/callback/{service}")
+async def oauth_callback(service: str, request: Request):
+    """
+    Smithery redirects the user here after they finish the OAuth flow for
+    `service`. We re-run upsert_connection so the manager caches the now-live
+    connection and its tools, then serve a tiny HTML page that notifies the
+    opener window (the ark app) and closes itself.
+    """
+    from fastapi.responses import HTMLResponse
+
+    user_id = request.query_params.get("user_id") or config.get("memory.user_id")
+    status = "connected"
+    error_msg: str | None = None
+
+    if not tool_manager:
+        status = "error"
+        error_msg = "tool manager disabled"
+    elif service not in (tool_manager.servers or {}):
+        status = "error"
+        error_msg = f"unknown service '{service}'"
+    else:
+        import aiohttp
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                await tool_manager._ensure_user_server(session, user_id, service)
+            except AuthRequiredError as e:
+                # User bounced back but the connection isn't live yet. Leave
+                # the setup URL in place so they can retry.
+                status = "pending"
+                error_msg = e.message
+            except Exception as e:
+                status = "error"
+                error_msg = str(e)
+
+        if status == "connected":
+            await _refresh_system_prompt()
+
+    import json as _json
+
+    payload = _json.dumps({"service": service, "status": status, "error": error_msg})
+    html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>ark - {service} connected</title>
+<style>
+  body {{ font-family: ui-monospace, monospace; background:#0b0b0b; color:#e6e6e6;
+         display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }}
+  .card {{ border:1px solid #333; padding:20px 24px; max-width:360px; text-align:center; }}
+  .ok {{ color:#4ade80; }} .err {{ color:#f87171; }} .pending {{ color:#fbbf24; }}
+  button {{ background:none; border:1px solid #666; color:inherit; padding:6px 12px;
+            font-family:inherit; cursor:pointer; margin-top:12px; }}
+</style></head><body>
+<div class="card">
+  <h3 class="{status}">{service}: {status}</h3>
+  <p style="font-size:12px;color:#888;">{error_msg or "you can close this window."}</p>
+  <button id="closeBtn">close</button>
+</div>
+<script>
+  const payload = {payload};
+  try {{
+    if (window.opener) {{
+      window.opener.postMessage({{ type: "ark-oauth-callback", payload }}, "*");
+    }}
+  }} catch (e) {{}}
+  document.getElementById("closeBtn").addEventListener("click", () => window.close());
+  if (payload.status === "connected") {{ setTimeout(() => window.close(), 800); }}
+</script>
+</body></html>"""
+
+    return HTMLResponse(content=html)
 
 
 @app.get("/health")

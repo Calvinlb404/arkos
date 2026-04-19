@@ -104,19 +104,29 @@ class SmitheryClient:
         name: str | None = None,
         metadata: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        return_url: str | None = None,
     ) -> dict[str, Any]:
         """
         PUT /connect/{namespace}/{connection_id}
 
         Returns the parsed JSON body. Callers should inspect .status to decide
         whether the connection is `connected`, `auth_required`, or `input_required`.
+
+        When `return_url` is provided we forward it to Smithery as both the
+        top-level `returnUrl` field AND inside metadata, so whichever the
+        current Smithery API accepts picks it up. After the user finishes the
+        hosted OAuth flow Smithery will redirect them to this URL.
         """
         url = f"{self.base_url}/connect/{self.namespace}/{connection_id}"
         body: dict[str, Any] = {"mcpUrl": mcp_url}
         if name:
             body["name"] = name
-        if metadata:
-            body["metadata"] = metadata
+        meta = dict(metadata or {})
+        if return_url:
+            body["returnUrl"] = return_url
+            meta.setdefault("returnUrl", return_url)
+        if meta:
+            body["metadata"] = meta
         if headers:
             body["headers"] = headers
 
@@ -306,11 +316,16 @@ class SmitheryManager:
         session: aiohttp.ClientSession,
         user_id: str,
         server_name: str,
+        *,
+        return_url: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Ensure a per-user connection for `server_name` exists and is connected.
         Returns the list of tools for that connection. On auth_required /
         input_required, raises AuthRequiredError with the setup URL.
+
+        `return_url`, when provided, is passed through to Smithery so that the
+        user is redirected back to the ark app after completing OAuth.
         """
         spec = self.servers.get(server_name)
         if not spec:
@@ -325,6 +340,7 @@ class SmitheryManager:
             name=spec.get("name", server_name),
             metadata={"userId": user_id},
             headers=spec.get("headers"),
+            return_url=return_url,
         )
         state, setup_url = _parse_status(conn.get("status"))
 

@@ -622,6 +622,107 @@
     font-size: 11px;
     padding: 6px 8px;
   }
+
+  /* ----- settings modal ----- */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 900;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-card {
+    width: 520px;
+    max-width: 94vw;
+    max-height: 86vh;
+    overflow-y: auto;
+    background: var(--bg);
+    border: 1px solid var(--bg-line);
+    padding: 24px 26px;
+  }
+  .modal-card h2 {
+    margin: 0 0 4px 0;
+    font-size: 18px;
+    font-family: var(--sans);
+    font-weight: 700;
+  }
+  .modal-card p.sub {
+    margin: 0 0 20px 0;
+    color: var(--fg-mute);
+    font-size: 11px;
+  }
+  .modal-card section { margin: 0 0 22px 0; }
+  .modal-card h3 {
+    margin: 0 0 10px 0;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-mute);
+    font-weight: 500;
+  }
+  .conn-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border: 1px solid var(--bg-line);
+    margin-bottom: 8px;
+  }
+  .conn-row .name { font-size: 13px; }
+  .conn-row .status {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg-mute);
+    margin-left: 8px;
+  }
+  .conn-row .status.ok { color: #4ade80; }
+  .conn-row .status.pending { color: #fbbf24; }
+  .conn-row .status.err { color: #f87171; }
+  .conn-row button {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    padding: 6px 12px;
+    border: 1px solid var(--fg);
+    background: transparent;
+    color: var(--fg);
+    cursor: pointer;
+    text-transform: lowercase;
+  }
+  .conn-row button.primary {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .conn-row button:disabled { opacity: .5; cursor: wait; }
+
+  .modal-card .actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid var(--bg-line);
+    padding-top: 14px;
+  }
+  .modal-card .actions .muted {
+    font-size: 10px;
+    color: var(--fg-mute);
+  }
+  .modal-card .actions button {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 6px 12px;
+    border: 1px solid var(--bg-line);
+    background: transparent;
+    color: var(--fg);
+    cursor: pointer;
+    text-transform: lowercase;
+    margin-left: 6px;
+  }
+  .modal-card .actions button.danger { border-color: var(--err); color: var(--err); }
 </style>
 </head>
 <body>
@@ -725,6 +826,36 @@
   </header>
   <div class="log" id="log"></div>
 </aside>
+
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal-card">
+    <h2>settings</h2>
+    <p class="sub">connections, account, and backend.</p>
+
+    <section>
+      <h3>tools &amp; connections</h3>
+      <div id="connList">
+        <div style="font-size:11px;color:var(--fg-mute);padding:8px 2px;">loading...</div>
+      </div>
+    </section>
+
+    <section>
+      <h3>account</h3>
+      <div style="font-size:11px;color:var(--fg-mute);">
+        signed in as <b id="settingsUser">—</b><br>
+        backend: <b id="settingsBackend">—</b>
+      </div>
+    </section>
+
+    <div class="actions">
+      <span class="muted">changes save automatically</span>
+      <div>
+        <button id="settingsSignOut" class="danger">sign out</button>
+        <button id="settingsClose">close</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
   // ---------- config ----------
@@ -1107,16 +1238,162 @@
     document.getElementById('drawer').classList.remove('open');
   });
 
-  document.getElementById('settingsBtn').addEventListener('click', () => {
-    const b = prompt('backend url:', CONFIG.backend);
-    if (b) localStorage.setItem('ark_backend', b);
-    // sign out option
-    if (confirm('sign out?')) {
-      localStorage.removeItem('ark_token');
-      localStorage.removeItem('ark_user_id');
-      localStorage.removeItem('ark_username');
-    }
+  // ---------- settings modal + connections ----------
+  const settingsModal = document.getElementById('settingsModal');
+  const connList = document.getElementById('connList');
+  let _connPoll = null;
+
+  function openSettings() {
+    document.getElementById('settingsUser').textContent = CONFIG.username || '—';
+    document.getElementById('settingsBackend').textContent = CONFIG.backend;
+    settingsModal.classList.add('open');
+    refreshConnections();
+  }
+  function closeSettings() {
+    settingsModal.classList.remove('open');
+    if (_connPoll) { clearInterval(_connPoll); _connPoll = null; }
+  }
+
+  document.getElementById('settingsBtn').addEventListener('click', openSettings);
+  document.getElementById('settingsClose').addEventListener('click', closeSettings);
+  document.getElementById('settingsSignOut').addEventListener('click', () => {
+    if (!confirm('sign out?')) return;
+    localStorage.removeItem('ark_token');
+    localStorage.removeItem('ark_user_id');
+    localStorage.removeItem('ark_username');
     location.reload();
+  });
+  // click outside card to close
+  settingsModal.addEventListener('click', (e) => {
+    if (e.target === settingsModal) closeSettings();
+  });
+
+  async function fetchServices() {
+    try {
+      const r = await fetch(CONFIG.backend + '/services', {
+        headers: authHeaders({ 'X-User-ID': CONFIG.userId || '' }),
+      });
+      if (!r.ok) throw new Error('bad status ' + r.status);
+      return await r.json();
+    } catch (e) {
+      return { error: String(e), shared: [], per_user: [] };
+    }
+  }
+
+  function renderConnections(data) {
+    const services = [...(data.per_user || []), ...(data.shared || [])];
+    if (data.error) {
+      connList.innerHTML = `<div style="font-size:11px;color:var(--err);padding:8px 2px;">${escapeHtml(data.error)}</div>`;
+      return;
+    }
+    if (!services.length) {
+      connList.innerHTML = '<div style="font-size:11px;color:var(--fg-mute);padding:8px 2px;">no services configured. add entries to <code>mcp_servers</code> in config.yaml.</div>';
+      return;
+    }
+    connList.innerHTML = services.map((svc) => {
+      const connected = !!svc.connected;
+      const perUser = (data.per_user || []).some((s) => s.service === svc.service);
+      const statusCls = connected ? 'ok' : (svc.setup_url ? 'pending' : '');
+      const statusTxt = connected ? 'connected' : (perUser ? 'not connected' : 'shared');
+      const btn = connected
+        ? (perUser ? `<button data-disconnect="${escapeHtml(svc.service)}">disconnect</button>` : '<span style="font-size:10px;color:var(--fg-mute);">always on</span>')
+        : `<button class="primary" data-connect="${escapeHtml(svc.service)}">connect</button>`;
+      return `
+        <div class="conn-row" data-service="${escapeHtml(svc.service)}">
+          <div>
+            <span class="name">${escapeHtml(svc.name || svc.service)}</span>
+            <span class="status ${statusCls}">${statusTxt}</span>
+          </div>
+          <div>${btn}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function refreshConnections() {
+    renderConnections(await fetchServices());
+  }
+
+  async function connectService(service, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'opening...'; }
+    try {
+      const r = await fetch(`${CONFIG.backend}/services/${encodeURIComponent(service)}/connect`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json', 'X-User-ID': CONFIG.userId || '' }),
+      });
+      const j = await r.json();
+      if (j.status === 'connected') {
+        await refreshConnections();
+        return;
+      }
+      if (j.setup_url) {
+        // Open Smithery's OAuth page in a popup, then poll until it flips to connected.
+        const popup = window.open(j.setup_url, 'ark_oauth', 'width=560,height=720');
+        startConnectionPoll(service, popup);
+      } else {
+        alert('could not start oauth: ' + (j.error || 'unknown error'));
+        await refreshConnections();
+      }
+    } catch (e) {
+      alert('connect failed: ' + e.message);
+    } finally {
+      if (btn) { btn.disabled = false; }
+    }
+  }
+
+  async function disconnectService(service) {
+    try {
+      await fetch(`${CONFIG.backend}/services/${encodeURIComponent(service)}/disconnect`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json', 'X-User-ID': CONFIG.userId || '' }),
+      });
+    } catch (e) {}
+    await refreshConnections();
+  }
+
+  function startConnectionPoll(service, popup) {
+    if (_connPoll) clearInterval(_connPoll);
+    _connPoll = setInterval(async () => {
+      const data = await fetchServices();
+      renderConnections(data);
+      const svc = (data.per_user || []).find((s) => s.service === service);
+      const popupClosed = popup && popup.closed;
+      if ((svc && svc.connected) || popupClosed) {
+        clearInterval(_connPoll);
+        _connPoll = null;
+        // one more refresh after popup closes in case connection just landed
+        setTimeout(refreshConnections, 400);
+      }
+    }, 2000);
+  }
+
+  // Listen for the oauth-callback postMessage from the popup so we refresh
+  // the moment the callback page loads, without waiting for the next poll tick.
+  window.addEventListener('message', (event) => {
+    const d = event.data || {};
+    if (d.type === 'ark-oauth-callback') {
+      refreshConnections();
+    }
+  });
+
+  // Delegated click handler for connect/disconnect buttons
+  connList.addEventListener('click', (e) => {
+    const connectBtn = e.target.closest('[data-connect]');
+    if (connectBtn) {
+      connectService(connectBtn.getAttribute('data-connect'), connectBtn);
+      return;
+    }
+    const discBtn = e.target.closest('[data-disconnect]');
+    if (discBtn) {
+      disconnectService(discBtn.getAttribute('data-disconnect'));
+    }
+  });
+
+  // escape key closes modal
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && settingsModal.classList.contains('open')) {
+      closeSettings();
+    }
   });
 
   // side nav scrolls to zone
