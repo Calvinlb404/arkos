@@ -94,6 +94,64 @@ class StatePlan(State):
                 completion_signal="needs_input",
             )
 
+        # Guardrail: reject pseudo-plans where every "step" is actually just
+        # asking the user for more info. Those should be clarifying questions,
+        # not an approve/decline card.
+        _CLARIFY_TOKENS = (
+            "ask the user",
+            "ask user",
+            "request the user",
+            "request more",
+            "request info",
+            "request information",
+            "prompt the user",
+            "prompt for",
+            "inquire",
+            "clarify",
+            "confirm with the user",
+            "check with the user",
+            "get the user",
+            "obtain from the user",
+            "gather from the user",
+        )
+
+        def _is_clarify_step(s: str) -> bool:
+            t = (s or "").strip().lower().lstrip("0123456789. -")
+            if not t:
+                return False
+            if t.startswith("ask "):
+                return True
+            return any(tok in t for tok in _CLARIFY_TOKENS)
+
+        action_steps = [s for s in plan.plan_steps if not _is_clarify_step(s)]
+
+        if plan.plan_steps and not action_steps:
+            # Fall back to treating the plan as a clarification. Phrase the
+            # first step as a direct question to the user.
+            question_src = plan.plan_steps[0].lstrip("0123456789. -")
+            # Strip common imperative openings so the output reads like a
+            # question instead of an instruction buddy gave itself.
+            for prefix in (
+                "Ask the user to ",
+                "Ask user to ",
+                "Request the user to ",
+                "Prompt the user to ",
+                "Ask ",
+                "Request ",
+                "Prompt ",
+            ):
+                if question_src.lower().startswith(prefix.lower()):
+                    question_src = question_src[len(prefix):]
+                    break
+            question = question_src.strip().rstrip(".")
+            if question and not question.endswith("?"):
+                question = question[0].upper() + question[1:] + "?"
+            return StateOutput(
+                content=question or "Could you tell me more about what you want to do?",
+                completion_signal="needs_input",
+                structured_data={"next_state": "ask_user", "route": "ask"},
+            )
+
         plan_text = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(plan.plan_steps))
 
         # The plan is NOT written to the DB here. We stream it back to the
