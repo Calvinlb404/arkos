@@ -13,6 +13,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from agent_module.agent import Agent
 from base_module.auth import router as auth_router
+from base_module.tasks import router as tasks_router
 from config_module.loader import config
 from memory_module.memory import Memory
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage
@@ -22,6 +23,7 @@ from tool_module.tool_call import MCPToolManager
 
 app = FastAPI(title="ArkOS Agent API", version="1.0.0")
 app.include_router(auth_router)
+app.include_router(tasks_router)
 
 
 # Initialize the agent and dependencies once
