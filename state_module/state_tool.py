@@ -94,11 +94,27 @@ class StateTool(State):
             )
 
         except AuthRequiredError as e:
+            service_label = e.service_info.get("name", e.service) if getattr(e, "service_info", None) else e.service
+            link = e.setup_url or e.connect_url or ""
+            if link:
+                body = (
+                    f"To do that I need access to **{service_label}**. "
+                    f"Open this link to connect it via Smithery, then ask me again.\n\n"
+                    f"[connect {service_label.lower()}]({link})"
+                )
+            else:
+                body = (
+                    f"To do that I need access to **{service_label}**, "
+                    f"but Smithery didn't return a setup URL. "
+                    f"Check the server's config (it may need an API key)."
+                )
             return StateOutput(
-                content=(
-                    f"To complete this request, please connect your {e.service_info.get('name', e.service)}:\n\n"
-                    f"👉 {e.connect_url}\n\n"
-                    f"After connecting, try your request again."
-                ),
+                content=body,
                 completion_signal="needs_input",
+                structured_data={
+                    "auth_required": True,
+                    "service": e.service,
+                    "setup_url": link or None,
+                    "state": getattr(e, "state", "auth_required"),
+                },
             )

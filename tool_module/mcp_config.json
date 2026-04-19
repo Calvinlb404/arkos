@@ -1,7 +1,0 @@
-config = {
-        "google-calendar": {
-            "command": "npx",
-            "args": ["@cocal/google-calendar-mcp"],
-            "env": env
-        }
-    }

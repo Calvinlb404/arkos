@@ -36,25 +36,34 @@ embedding:
 state:
   graph_path: "state_module/state_graph.yaml"
 
+# All MCP traffic flows through Smithery Connect. No local subprocesses, no
+# per-provider OAuth plumbing on our side. Smithery maintains the OAuth apps,
+# stores credentials write-only, and refreshes tokens automatically.
+smithery:
+  api_key: "${SMITHERY_API_KEY}"
+  namespace: "${SMITHERY_NAMESPACE}"     # e.g. "arkos"
+  base_url: "https://api.smithery.ai"
+
 mcp_servers:
-  brave-search:
-    transport: stdio
-    command: npx
-    args: ["-y", "@brave/brave-search-mcp-server", "--transport", "stdio"]#   
-    env:
-      BRAVE_API_KEY: "${BRAVE_API_KEY}"
+  # The Linear demo target. requires_auth => Smithery's hosted OAuth flow.
+  linear:
+    mcp_url: "https://linear.run.tools"
+    requires_auth: true
+    name: "Linear"
 
-  google-calendar:
-    transport: stdio
-    command: npx
-    args: ["-y", "@cocal/google-calendar-mcp"]
-    env:
-      GOOGLE_OAUTH_CREDENTIALS: "${GOOGLE_OAUTH_CREDENTIALS}"
-
-  filesystem:
-    transport: stdio
-    command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+  # Add more servers by copying from https://smithery.ai/server/<name>.
+  # Example (commented so a missing API key doesn't break startup):
+  #
+  # brave-search:
+  #   mcp_url: "https://brave.run.tools"
+  #   requires_auth: false
+  #   headers:
+  #     braveApiKey: "${BRAVE_API_KEY}"
+  #
+  # google-calendar:
+  #   mcp_url: "https://google-calendar.run.tools"
+  #   requires_auth: true
+  #   name: "Google Calendar"
 
 
 

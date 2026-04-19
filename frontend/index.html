@@ -791,7 +791,8 @@
     for (const m of state.history) {
       const row = document.createElement('div');
       row.className = 'msg ' + m.role;
-      row.innerHTML = `<div class="who">${m.role === 'user' ? 'you' : 'ark'}</div><div class="body">${escapeHtml(m.content)}</div>`;
+      const body = m.role === 'user' ? escapeHtml(m.content) : renderMd(m.content);
+      row.innerHTML = `<div class="who">${m.role === 'user' ? 'you' : 'ark'}</div><div class="body">${body}</div>`;
       log.appendChild(row);
     }
     log.scrollTop = log.scrollHeight;
@@ -804,6 +805,22 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  // Minimal markdown-lite: escape first, then linkify [text](url) and bare
+  // URLs, then handle **bold**. Used for chat replies so buddy can emit
+  // clickable connect links from Smithery.
+  function renderMd(s) {
+    let out = escapeHtml(s);
+    // [text](url) ... url is already escaped so &amp; / &#39; etc are safe
+    out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      (_m, t, u) => `<a href="${u}" target="_blank" rel="noopener">${t}</a>`);
+    // bare http(s) URLs not already inside an anchor
+    out = out.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)"]+)/g,
+      (_m, pre, u) => `${pre}<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+    // **bold**
+    out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    return out;
   }
 
   // ---------- event wiring ----------
@@ -1128,14 +1145,14 @@
             const delta = j.choices?.[0]?.delta?.content;
             if (delta) {
               reply += delta;
-              contentEl.textContent = reply;
+              contentEl.innerHTML = renderMd(reply);
             }
           } catch {}
         }
       }
     } catch (err) {
       reply = '[buddy offline: ' + (err.message || err) + ']\nstart the backend: python base_module/app.py';
-      contentEl.textContent = reply;
+      contentEl.innerHTML = renderMd(reply);
     }
 
     state.history.push({ role: 'ark', content: reply });

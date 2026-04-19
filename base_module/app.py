@@ -14,14 +14,12 @@ from fastapi.staticfiles import StaticFiles
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from agent_module.agent import Agent
-from base_module.auth import router as auth_router
 from base_module.tasks import router as tasks_router
 from base_module.users import router as users_router
 from config_module.loader import config
 from memory_module.memory import Memory
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage
 from state_module.state_handler import StateHandler
-from tool_module.token_store import UserTokenStore
 from tool_module.tool_call import MCPToolManager
 
 app = FastAPI(title="ArkOS Agent API", version="1.0.0")
@@ -35,7 +33,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(tasks_router)
 
@@ -66,11 +63,20 @@ memory = Memory(
 llm = ArkModelLink(base_url=config.get("llm.base_url"), max_tokens=config.get("llm.max_tokens"))
 
 
-# Token store for per-user MCP authentication
-token_store = UserTokenStore(config.get("database.url"))
-
+# MCP connectivity. Everything flows through Smithery Connect; per-user OAuth
+# and credential storage happen on Smithery's side, not ours.
 mcp_config = config.get("mcp_servers")
-tool_manager = MCPToolManager(mcp_config, token_store=token_store) if mcp_config else None
+smithery_config = config.get("smithery") or {}
+tool_manager = (
+    MCPToolManager(mcp_config, smithery_config=smithery_config)
+    if mcp_config and smithery_config.get("api_key")
+    else None
+)
+if tool_manager is None:
+    if not smithery_config.get("api_key"):
+        print("[ark] SMITHERY_API_KEY missing; MCP tool manager disabled")
+    elif not mcp_config:
+        print("[ark] no mcp_servers configured; tool manager disabled")
 agent = Agent(
     agent_id=config.get("memory.user_id"),
     flow=flow,
