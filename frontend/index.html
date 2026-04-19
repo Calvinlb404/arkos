@@ -764,6 +764,8 @@
 
   // ---------- state ----------
   // approvals + tasks come from the DB; watching stays local until we wire a watchers table.
+  let _lastRenderKey = '';
+
   const state = {
     approvals: [],
     tasks: [],
@@ -789,6 +791,9 @@
 
   // ---------- render ----------
   function render() {
+    const key = JSON.stringify({ a: state.approvals, t: state.tasks, x: state.expandedTaskId, ev: state.taskEvents[state.expandedTaskId] });
+    if (key === _lastRenderKey) return;
+    _lastRenderKey = key;
     const a = document.getElementById('approvalsList');
     a.innerHTML = '';
     if (!state.approvals.length) {
