@@ -466,6 +466,93 @@
     .ambient { padding-left: 20px; }
     .floater-layer { left: 20px; right: 20px; }
   }
+
+  /* ---------- login overlay ---------- */
+  .login-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity .25s ease;
+  }
+  .login-overlay.hidden { opacity: 0; pointer-events: none; }
+  .login-card {
+    width: 380px;
+    max-width: 92vw;
+    padding: 28px 28px 24px 28px;
+    border: 1px solid var(--bg-line);
+    background: var(--bg);
+    font-family: var(--mono);
+  }
+  .login-card h1 {
+    margin: 0 0 6px 0;
+    font-size: 22px;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+    font-family: var(--sans);
+  }
+  .login-card p {
+    margin: 0 0 20px 0;
+    color: var(--fg-mute);
+    font-size: 11px;
+    line-height: 1.6;
+  }
+  .login-card label {
+    display: block;
+    font-size: 10px;
+    color: var(--fg-mute);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .login-card input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--bg-line);
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 14px;
+    outline: none;
+  }
+  .login-card input:focus { border-color: var(--fg); }
+  .login-card .row {
+    margin-top: 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .login-card .err {
+    color: var(--err);
+    font-size: 11px;
+    margin-top: 8px;
+    min-height: 14px;
+  }
+  .login-card button {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    padding: 8px 16px;
+    border: 1px solid var(--fg);
+    background: var(--fg);
+    color: var(--bg);
+    cursor: pointer;
+    text-transform: lowercase;
+  }
+  .login-card button:disabled { opacity: .5; cursor: wait; }
+  .login-card .backend-row {
+    margin-top: 14px;
+    font-size: 10px;
+    color: var(--fg-mute);
+  }
+  .login-card .backend-row input {
+    margin-top: 4px;
+    font-size: 11px;
+    padding: 6px 8px;
+  }
 </style>
 </head>
 <body>
@@ -544,6 +631,24 @@
   </div>
 </div>
 
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-card">
+    <h1>ark.</h1>
+    <p>buddy handles your digital life in the background. pick a username to get started. no passwords, no email. it's you and your buddy.</p>
+    <label for="loginUser">username</label>
+    <input id="loginUser" autocomplete="off" spellcheck="false" placeholder="e.g. nate" />
+    <div class="err" id="loginErr"></div>
+    <div class="row">
+      <span style="font-size:10px;color:var(--fg-mute);">enter to continue</span>
+      <button id="loginBtn">enter &rarr;</button>
+    </div>
+    <div class="backend-row">
+      backend
+      <input id="loginBackend" value="http://localhost:1113" />
+    </div>
+  </div>
+</div>
+
 <aside class="drawer" id="drawer">
   <header>
     <span>conversation log</span>
@@ -556,32 +661,29 @@
   // ---------- config ----------
   const CONFIG = {
     backend: (localStorage.getItem('ark_backend') || 'http://localhost:1113').replace(/\/$/, ''),
-    userId: localStorage.getItem('ark_user') || 'arkos-agent',
+    token: localStorage.getItem('ark_token') || '',
+    userId: localStorage.getItem('ark_user_id') || '',
+    username: localStorage.getItem('ark_username') || '',
     model: 'ark-agent',
   };
-  document.getElementById('userLabel').textContent = CONFIG.userId;
-  document.getElementById('backendLabel').textContent = CONFIG.backend.replace(/^https?:\/\//, '');
 
-  // ---------- state (mock surfaces + real backend chat) ----------
+  function authHeaders(extra) {
+    const h = Object.assign({}, extra || {});
+    if (CONFIG.token) h['Authorization'] = 'Bearer ' + CONFIG.token;
+    return h;
+  }
+
+  function setUserLabels() {
+    document.getElementById('userLabel').textContent = CONFIG.username || '—';
+    document.getElementById('backendLabel').textContent = CONFIG.backend.replace(/^https?:\/\//, '');
+  }
+  setUserLabels();
+
+  // ---------- state ----------
+  // approvals + tasks come from the DB; watching stays local until we wire a watchers table.
   const state = {
-    approvals: [
-      {
-        id: 'ap1',
-        source: 'gmail',
-        title: 'reply to Prof. Rivera about Thursday meeting',
-        plan: '1. confirm 3pm thursday in rm 32-g882\n2. attach the draft you wrote sunday\n3. cc Angela',
-      },
-      {
-        id: 'ap2',
-        source: 'linear',
-        title: 'move ARK-142 to "in review" and tag reviewer',
-        plan: '1. move ARK-142 to "in review"\n2. assign reviewer: nathaniel\n3. post summary as comment',
-      },
-    ],
-    tasks: [
-      { id: 't1', text: 'digesting 14 unread emails from the last 4 hours', when: '2m' },
-      { id: 't2', text: 'drafting weekly update for team buddies', when: '8m' },
-    ],
+    approvals: [],
+    tasks: [],
     watching: [
       { id: 'w1', text: 'linear.app / team ark', when: 'every 5m' },
       { id: 'w2', text: 'mail.google.com / inbox', when: 'live' },
@@ -589,6 +691,16 @@
     ],
     history: [],
   };
+
+  function relTime(iso) {
+    if (!iso) return '';
+    const t = new Date(iso).getTime();
+    const s = Math.max(1, Math.floor((Date.now() - t) / 1000));
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.floor(s / 60) + 'm';
+    if (s < 86400) return Math.floor(s / 3600) + 'h';
+    return Math.floor(s / 86400) + 'd';
+  }
 
   // ---------- render ----------
   function render() {
@@ -681,24 +793,34 @@
   }
 
   // ---------- event wiring ----------
-  document.addEventListener('click', (e) => {
+  document.addEventListener('click', async (e) => {
     const ap = e.target.closest('[data-approve]');
     const dc = e.target.closest('[data-decline]');
     if (ap) {
       const id = ap.dataset.approve;
-      const item = state.approvals.find((x) => x.id === id);
-      state.approvals = state.approvals.filter((x) => x.id !== id);
-      state.tasks.unshift({ id: 'done-' + id, text: 'executing: ' + (item?.title || 'approved plan'), when: 'now' });
-      render();
+      await callTaskAction(id, 'approve');
+      await refreshTasks();
       return;
     }
     if (dc) {
       const id = dc.dataset.decline;
-      state.approvals = state.approvals.filter((x) => x.id !== id);
-      render();
+      await callTaskAction(id, 'decline');
+      await refreshTasks();
       return;
     }
   });
+
+  async function callTaskAction(taskId, action) {
+    try {
+      const r = await fetch(`${CONFIG.backend}/tasks/${encodeURIComponent(taskId)}/${action}`, {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+      if (!r.ok) console.warn(`${action} failed`, r.status, await r.text());
+    } catch (err) {
+      console.warn(action + ' error', err);
+    }
+  }
 
   document.getElementById('themeToggle').addEventListener('click', () => {
     const cur = document.documentElement.getAttribute('data-theme');
@@ -742,9 +864,13 @@
 
   document.getElementById('settingsBtn').addEventListener('click', () => {
     const b = prompt('backend url:', CONFIG.backend);
-    if (b) { localStorage.setItem('ark_backend', b); }
-    const u = prompt('user id:', CONFIG.userId);
-    if (u) { localStorage.setItem('ark_user', u); }
+    if (b) localStorage.setItem('ark_backend', b);
+    // sign out option
+    if (confirm('sign out?')) {
+      localStorage.removeItem('ark_token');
+      localStorage.removeItem('ark_user_id');
+      localStorage.removeItem('ark_username');
+    }
     location.reload();
   });
 
@@ -774,18 +900,137 @@
     const dot = document.getElementById('statusDot');
     try {
       const r = await fetch(CONFIG.backend + '/health', { method: 'GET' });
-      if (!r.ok) throw new Error('bad status');
+      if (r.status !== 200 && r.status !== 503) throw new Error('bad status');
       const j = await r.json();
+      const allRunning = j.status === 'ok';
       dot.classList.remove('off', 'err');
-      dot.title = 'connected / llm ' + (j.llm_server || 'unknown');
+      if (!allRunning) dot.classList.add('err');
+      dot.title = 'backend ' + (j.status || 'unknown');
     } catch (err) {
       dot.classList.remove('off');
       dot.classList.add('err');
       dot.title = 'backend unreachable at ' + CONFIG.backend;
     }
   }
-  checkHealth();
-  setInterval(checkHealth, 15000);
+
+  async function refreshTasks() {
+    if (!CONFIG.token) return;
+    try {
+      const [pendingRes, runningRes] = await Promise.all([
+        fetch(`${CONFIG.backend}/tasks?status=pending`, { headers: authHeaders() }),
+        fetch(`${CONFIG.backend}/tasks?status=running`, { headers: authHeaders() }),
+      ]);
+      if (pendingRes.status === 401 || runningRes.status === 401) {
+        // token invalid; force re-login
+        localStorage.removeItem('ark_token');
+        location.reload();
+        return;
+      }
+      const pending = pendingRes.ok ? await pendingRes.json() : { tasks: [] };
+      const running = runningRes.ok ? await runningRes.json() : { tasks: [] };
+
+      state.approvals = (pending.tasks || []).map((t) => ({
+        id: t.task_id,
+        source: (t.context_payload && t.context_payload.source) || 'chat',
+        title: t.title || '(untitled plan)',
+        plan: t.plan || '',
+      }));
+      state.tasks = (running.tasks || []).map((t) => ({
+        id: t.task_id,
+        text: t.title || 'running task',
+        when: relTime(t.updated_at),
+      }));
+      render();
+    } catch (err) {
+      console.warn('refreshTasks failed', err);
+    }
+  }
+
+  // ---------- auth bootstrap ----------
+  async function ensureAuthed() {
+    // validate existing token
+    if (CONFIG.token) {
+      try {
+        const r = await fetch(CONFIG.backend + '/auth/me', { headers: authHeaders() });
+        if (r.ok) {
+          const j = await r.json();
+          CONFIG.userId = j.user_id;
+          CONFIG.username = j.username;
+          localStorage.setItem('ark_user_id', j.user_id);
+          localStorage.setItem('ark_username', j.username);
+          setUserLabels();
+          document.getElementById('loginOverlay').classList.add('hidden');
+          return true;
+        }
+      } catch {}
+      // token no good
+      CONFIG.token = '';
+      localStorage.removeItem('ark_token');
+    }
+    document.getElementById('loginOverlay').classList.remove('hidden');
+    document.getElementById('loginUser').focus();
+    return false;
+  }
+
+  async function doLogin(username) {
+    const errEl = document.getElementById('loginErr');
+    errEl.textContent = '';
+    const btn = document.getElementById('loginBtn');
+    btn.disabled = true;
+    try {
+      const backendInput = document.getElementById('loginBackend').value.trim().replace(/\/$/, '');
+      if (backendInput) {
+        CONFIG.backend = backendInput;
+        localStorage.setItem('ark_backend', backendInput);
+      }
+      const r = await fetch(CONFIG.backend + '/auth/demo-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username }),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(r.status + ': ' + t);
+      }
+      const j = await r.json();
+      CONFIG.token = j.token;
+      CONFIG.userId = j.user_id;
+      CONFIG.username = j.username;
+      localStorage.setItem('ark_token', j.token);
+      localStorage.setItem('ark_user_id', j.user_id);
+      localStorage.setItem('ark_username', j.username);
+      setUserLabels();
+      document.getElementById('loginOverlay').classList.add('hidden');
+      await refreshTasks();
+    } catch (e) {
+      errEl.textContent = 'login failed. ' + (e.message || e);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById('loginBtn').addEventListener('click', () => {
+    const u = document.getElementById('loginUser').value.trim();
+    if (u.length < 2) {
+      document.getElementById('loginErr').textContent = 'username must be at least 2 characters';
+      return;
+    }
+    doLogin(u);
+  });
+  document.getElementById('loginUser').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('loginBtn').click();
+  });
+
+  // boot
+  (async () => {
+    checkHealth();
+    setInterval(checkHealth, 15000);
+    const ok = await ensureAuthed();
+    if (ok) {
+      await refreshTasks();
+      setInterval(refreshTasks, 6000);
+    }
+  })();
 
   // ---------- chat: novel streaming with fold-into-card ----------
   let currentFloater = null;
@@ -833,10 +1078,10 @@
     try {
       const res = await fetch(CONFIG.backend + '/v1/chat/completions', {
         method: 'POST',
-        headers: {
+        headers: authHeaders({
           'Content-Type': 'application/json',
           'X-User-ID': CONFIG.userId,
-        },
+        }),
         body: JSON.stringify({
           model: CONFIG.model,
           stream: true,
@@ -880,22 +1125,10 @@
     state.history.push({ role: 'ark', content: reply });
     renderLog();
 
-    // fold the floater into the appropriate dashboard zone as a new card
-    setTimeout(() => {
-      const intent = classifyIntent(text, reply);
-      if (intent === 'watching') {
-        state.watching.unshift({ id: 'w-' + Date.now(), text: summarize(text), when: 'just now' });
-      } else if (intent === 'approvals') {
-        state.approvals.unshift({
-          id: 'ap-' + Date.now(),
-          source: 'chat',
-          title: summarize(text),
-          plan: reply.split('\n').slice(0, 6).join('\n'),
-        });
-      } else {
-        state.tasks.unshift({ id: 't-' + Date.now(), text: summarize(text), when: 'just now' });
-      }
-      render();
+    // pull fresh state from the DB. the workshop_plan FSM state persists a
+    // pending task when buddy workshops a plan; the dashboard surfaces it.
+    setTimeout(async () => {
+      await refreshTasks();
       foldAndRemove(floater);
     }, 1400);
   }
