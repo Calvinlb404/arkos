@@ -1,10 +1,12 @@
 """
-Planning state: buddy workshops a structured plan with the user, then persists it.
+Planning state: buddy workshops a structured plan with the user.
 
-The plan is written to the `tasks` table with status='pending' so the frontend
-can surface it in the Pending Approvals zone. The user approves or declines
-via the /tasks/{id}/approve|decline endpoints. On approve, the FSM can pick
-the task back up and transition into use_tool to execute.
+The plan is NOT persisted to the DB from this state. It's returned to the
+chat layer as structured_data so the frontend can render an inline plan card
+with approve/decline buttons. On approve, the frontend calls POST /tasks
+which mints a task row (status='running') and spawns a subagent via the
+task runner. Pending Approvals on the desk is now reserved for mid-flight
+checkpoints raised by running subagents, not initial plan approval.
 """
 
 from __future__ import annotations
@@ -94,41 +96,31 @@ class StatePlan(State):
 
         plan_text = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(plan.plan_steps))
 
-        # Persist the workshopped plan as a pending task, scoped to the current user.
-        # Import here to avoid a circular import at module load.
-        try:
-            from base_module.tasks import persist_workshopped_plan  # noqa: WPS433
-        except Exception as e:  # fall through gracefully if backend layout changes
-            return StateOutput(
-                content=f"(plan drafted but could not persist: {e})\n\n{plan_text}",
-                completion_signal="needs_input",
-            )
+        # The plan is NOT written to the DB here. We stream it back to the
+        # frontend as a human-readable body plus a sentinel JSON block the
+        # frontend parses to render an inline plan card (approve/decline).
+        # On approve, the frontend calls POST /tasks, which mints the task
+        # row and spawns the runner.
+        import json as _json
 
-        task_id = None
-        user_id = getattr(agent, "current_user_id", None)
-        if user_id:
-            try:
-                task_id = persist_workshopped_plan(
-                    user_id=user_id,
-                    title=plan.title,
-                    plan=plan_text,
-                    required_tools=plan.required_tools,
-                    extra_context={"source": "chat"},
-                )
-            except Exception as e:
-                return StateOutput(
-                    content=f"(could not persist plan: {e})\n\n{plan_text}",
-                    completion_signal="needs_input",
-                )
+        payload = {
+            "kind": "plan_proposal",
+            "title": plan.title,
+            "plan_steps": list(plan.plan_steps),
+            "required_tools": list(plan.required_tools),
+        }
+        sentinel = "```ark-plan\n" + _json.dumps(payload) + "\n```"
 
         body = [
-            f"Here's the plan I workshopped. Approve it on your desk to run it.",
+            "Here's the plan I put together. Approve it below to run it.",
             "",
             f"**{plan.title}**",
             plan_text,
+            "",
+            sentinel,
         ]
         return StateOutput(
             content="\n".join(body),
             completion_signal="needs_input",
-            structured_data={"task_id": task_id, "plan_title": plan.title},
+            structured_data=payload,
         )

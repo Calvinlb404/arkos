@@ -84,9 +84,55 @@ class StateTool(State):
         return tool_result
 
     async def run(self, context, agent=None):
+        # Local import: avoid forcing task_store on the chat path on cold start
         try:
-            tool_arg_dict = await self.choose_tool(context=context, agent=agent)
+            from base_module.task_store import log_event
+        except Exception:
+            log_event = None  # type: ignore
+
+        try:
+            # Executor path: the tool + args were pre-selected in state_executor.
+            # Chat path: fall back to the legacy "choose from context" behaviour.
+            pending = getattr(agent, "pending_tool", None)
+            if pending and pending.get("tool_name"):
+                tool_arg_dict = {
+                    "tool_name": pending["tool_name"],
+                    "tool_args": pending.get("tool_args") or {},
+                }
+                agent.pending_tool = None
+                forced_next = "executor"
+            else:
+                tool_arg_dict = await self.choose_tool(context=context, agent=agent)
+                forced_next = None
+
+            task_id = getattr(agent, "task_id", None)
+            if task_id and log_event:
+                log_event(
+                    task_id,
+                    "tool_call",
+                    tool_arg_dict["tool_name"],
+                    payload={"args": tool_arg_dict["tool_args"]},
+                )
+
             tool_result = await self.execute_tool(tool_call=tool_arg_dict, agent=agent)
+
+            if task_id and log_event:
+                log_event(
+                    task_id,
+                    "tool_result",
+                    str(tool_result)[:2000],
+                    payload={"tool_name": tool_arg_dict["tool_name"]},
+                )
+
+            if forced_next:
+                # Inside the executor graph: advance past this plan step
+                agent.step_idx = getattr(agent, "step_idx", 0) + 1
+                return StateOutput(
+                    content=f"tool `{tool_arg_dict['tool_name']}` -> {str(tool_result)[:400]}",
+                    completion_signal="complete",
+                    structured_data={"tool_result": tool_result, "next_state": forced_next},
+                )
+
             return StateOutput(
                 content=str(tool_result),
                 completion_signal="complete",

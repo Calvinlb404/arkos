@@ -46,6 +46,11 @@ class Agent:
         self.available_tools = {}
         self.current_user_id = None  # Set per-request for per-user tool auth
         self.last_state_output: StateOutput | None = None
+        # Subagents override these. The executor graph uses them to iterate plan steps.
+        self.task_id: str | None = None
+        self.plan_steps: list[str] = []
+        self.step_idx: int = 0
+        self.max_iter: int = MAX_ITER
 
     # def bind_tool(self, tool):
     #
@@ -232,7 +237,7 @@ class Agent:
             loop_start = time.time()
             print(f"Inner loop #{retry_count + 1}")
 
-            if retry_count > MAX_ITER:
+            if retry_count > self.max_iter:
                 print("MAX ITER REACHED")
                 break
             retry_count += 1
@@ -260,7 +265,15 @@ class Agent:
                 transition_dict = self.flow.get_transitions(self.current_state, messages_list)
                 transition_names = transition_dict["tt"]
 
-                if len(transition_names) == 1:
+                # Deterministic override: a state can force the next transition
+                # by putting "next_state" into StateOutput.structured_data. This is
+                # how executor-style graphs bypass LLM-guided transition choice.
+                forced = None
+                if update and isinstance(update.structured_data, dict):
+                    forced = update.structured_data.get("next_state")
+                if forced and forced in transition_names:
+                    next_state_name = forced
+                elif len(transition_names) == 1:
                     next_state_name = transition_names[0]
                 else:
                     next_state_name = await self.choose_transition(transition_dict, messages_list)
@@ -274,7 +287,7 @@ class Agent:
 
         print(f"[TIMING] step total: {time.time() - step_start:.3f}s")
         print("LAST_STATE_OUTPUT", self.last_state_output)
-        self.current_state = self.flow.get_state("agent_reply")
+        self.current_state = self.flow.get_initial_state()
         return self.last_state_output
 
     async def step_stream(self, messages, user_id: str = None):
@@ -296,7 +309,7 @@ class Agent:
         while True:
             print(f"agent.py [STREAM] Inner loop - State: {self.current_state.name}")
 
-            if retry_count > MAX_ITER:
+            if retry_count > self.max_iter:
                 print("agent.py [STREAM] MAX ITER REACHED")
                 yield "\n[Max iterations reached]"
                 break
@@ -338,7 +351,12 @@ class Agent:
                 transition_names = transition_dict["tt"]
                 print(f"agent.py [STREAM] Transitions: {transition_names}")
 
-                if len(transition_names) == 1:
+                forced = None
+                if update and isinstance(update.structured_data, dict):
+                    forced = update.structured_data.get("next_state")
+                if forced and forced in transition_names:
+                    next_state_name = forced
+                elif len(transition_names) == 1:
                     next_state_name = transition_names[0]
                 else:
                     next_state_name = await self.choose_transition(transition_dict, messages_list)
@@ -354,9 +372,7 @@ class Agent:
                 break
 
         print("agent.py [STREAM] Complete")
-        self.current_state = self.flow.get_state("agent_reply")
-
-        self.current_state = self.flow.get_state("agent_reply")
+        self.current_state = self.flow.get_initial_state()
 
 
 if __name__ == "__main__":

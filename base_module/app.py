@@ -128,6 +128,16 @@ async def startup():
     else:
         agent.system_prompt = base_system_prompt
 
+    # Resume any subagent tasks that were in-flight before a restart.
+    try:
+        from base_module.task_runner import sweep_orphans
+
+        resumed = await sweep_orphans()
+        if resumed:
+            print(f"[ark] resumed {resumed} orphan task(s) after restart")
+    except Exception as e:
+        print(f"[ark] task orphan sweep failed: {e}")
+
 
 @app.get("/health")
 async def health_check():
