@@ -642,6 +642,10 @@
       <span style="font-size:10px;color:var(--fg-mute);">enter to continue</span>
       <button id="loginBtn">enter &rarr;</button>
     </div>
+    <div class="backend-row">
+      <label for="loginBackend">backend url (optional override)</label>
+      <input id="loginBackend" autocomplete="off" spellcheck="false" placeholder="http://localhost:1113" />
+    </div>
   </div>
 </div>
 
@@ -659,14 +663,15 @@
   // the origin we were loaded from. config.yaml controls the port. If the page
   // was opened as file://, we fall back to localhost:1113 for dev.
   function resolveBackend() {
+    // Explicit override from the login card wins.
+    const override = localStorage.getItem('ark_backend');
+    if (override) return override;
+    // Otherwise use the origin we were served from (config.yaml controls the port).
     if (location.protocol.startsWith('http') && location.host) {
       return location.origin;
     }
     return 'http://localhost:1113';
   }
-
-  // Wipe any stale backend override from earlier runs so config.yaml wins.
-  localStorage.removeItem('ark_backend');
 
   const CONFIG = {
     backend: resolveBackend(),
@@ -987,10 +992,12 @@
     const btn = document.getElementById('loginBtn');
     btn.disabled = true;
     try {
-      const backendInput = document.getElementById('loginBackend').value.trim().replace(/\/$/, '');
+      const backendEl = document.getElementById('loginBackend');
+      const backendInput = backendEl ? backendEl.value.trim().replace(/\/$/, '') : '';
       if (backendInput) {
         CONFIG.backend = backendInput;
         localStorage.setItem('ark_backend', backendInput);
+        setUserLabels();
       }
       const r = await fetch(CONFIG.backend + '/auth/demo-login', {
         method: 'POST',
