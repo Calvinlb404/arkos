@@ -922,9 +922,20 @@
 
   // ---------- render ----------
   function render() {
-    const key = JSON.stringify({ a: state.approvals, t: state.tasks, x: state.expandedTaskId, ev: state.taskEvents[state.expandedTaskId] });
+    // Key on stable fields only — relTime and event content change every poll
+    // even when nothing meaningful has changed, causing needless re-renders.
+    const key = JSON.stringify({
+      a: state.approvals.map((x) => x.approval_id),
+      t: state.tasks.map((x) => x.id + '|' + x.status),
+      x: state.expandedTaskId,
+      evLen: (state.taskEvents[state.expandedTaskId] || []).length,
+    });
     if (key === _lastRenderKey) return;
     _lastRenderKey = key;
+
+    // Preserve focus — rebuilding tasksList can cause the browser to drop it.
+    const focused = document.activeElement;
+    const focusedId = focused && focused.id;
     const a = document.getElementById('approvalsList');
     a.innerHTML = '';
     if (!state.approvals.length) {
@@ -1011,6 +1022,11 @@
     document.getElementById('approvalsPill').textContent = state.approvals.length + ' pending';
 
     renderLog();
+
+    if (focusedId) {
+      const el = document.getElementById(focusedId);
+      if (el && document.activeElement !== el) el.focus();
+    }
   }
 
   function renderLog() {

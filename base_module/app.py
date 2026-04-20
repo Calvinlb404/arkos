@@ -50,15 +50,12 @@ else:
 
 flow = StateHandler(yaml_path=config.get("state.graph_path"))
 
-
 memory = Memory(
     user_id=config.get("memory.user_id"),
     session_id=None,
     db_url=config.get("database.url"),
-    use_long_term=config.get("memory.use_long_term", False),  # Disabled for speed
+    use_long_term=config.get("memory.use_long_term", False),
 )
-
-# Default system prompt for the agent
 
 # ArkModelLink now uses AsyncOpenAI internally
 llm = ArkModelLink(base_url=config.get("llm.base_url"), max_tokens=config.get("llm.max_tokens"))
@@ -125,18 +122,20 @@ def format_tools_for_system_prompt(tools_by_server: dict, deferred: list[dict] |
                 lines.append("")
 
     if deferred:
-        lines.append("The following services are configured but not yet connected for the current user.")
-        lines.append("You cannot call their tools until the user completes the Smithery OAuth flow.")
-        lines.append("If the user asks for something that needs one of these, tell them it needs to be connected first and share the setup URL:")
-        lines.append("")
-        for svc in deferred:
-            nm = svc.get("name") or svc.get("service")
-            url = svc.get("setup_url")
-            if url:
-                lines.append(f"- {nm} (service id: {svc.get('service')}): connect via {url}")
-            else:
-                lines.append(f"- {nm} (service id: {svc.get('service')}): needs connection; direct the user to the ark connections panel")
-        lines.append("")
+        real_deferred = [svc for svc in deferred if svc.get("service") not in (tools_by_server or {})]
+        if real_deferred:
+            lines.append("The following services are configured but not yet connected for the current user.")
+            lines.append("You cannot call their tools until the user completes the Smithery OAuth flow.")
+            lines.append("If the user asks for something that needs one of these, tell them it needs to be connected first and share the setup URL:")
+            lines.append("")
+            for svc in real_deferred:
+                nm = svc.get("name") or svc.get("service")
+                url = svc.get("setup_url")
+                if url:
+                    lines.append(f"- {nm} (service id: {svc.get('service')}): connect via {url}")
+                else:
+                    lines.append(f"- {nm} (service id: {svc.get('service')}): needs connection; direct the user to the ark connections panel")
+            lines.append("")
 
     return "\n".join(lines)
 
@@ -168,7 +167,6 @@ async def startup():
     if tool_manager:
         await tool_manager.initialize_servers()
 
-        # Cache tools on agent
         agent.available_tools = await tool_manager.list_all_tools()
 
         shared_tools = sum(len(tools) for tools in agent.available_tools.values())
@@ -185,7 +183,6 @@ async def startup():
             print(f"[ark]   deferred (needs user OAuth): {', '.join(s['service'] for s in deferred)}")
 
         tool_prompt = format_tools_for_system_prompt(agent.available_tools, deferred=deferred)
-
         agent.system_prompt = base_system_prompt + "\n\n" + tool_prompt if base_system_prompt else tool_prompt
     else:
         agent.system_prompt = base_system_prompt
@@ -456,6 +453,25 @@ async def chat_completions(request: Request):
 
     # Extract user_id from header or body for per-user tool auth
     user_id = request.headers.get("X-User-ID") or payload.get("user") or payload.get("user_id")
+
+    # Lazily connect any per-user OAuth servers (e.g. Linear) that the user
+    # has already authorized.  This populates tool_manager._user_tools so
+    # the system prompt includes their tools instead of a "please connect" stub.
+    if tool_manager and user_id:
+        import aiohttp as _aiohttp
+
+        async with _aiohttp.ClientSession() as _sess:
+            for svc_name, spec in tool_manager.servers.items():
+                if not spec.get("requires_auth"):
+                    continue
+                # Skip if already loaded for this user
+                if svc_name in (tool_manager._user_tools.get(user_id) or {}):
+                    continue
+                try:
+                    await tool_manager._ensure_user_server(_sess, user_id, svc_name)
+                except Exception:
+                    pass  # auth_required is expected if user hasn't connected yet
+        await _refresh_system_prompt()
 
     context_msgs = []
     context_msgs.append(SystemMessage(content=agent.system_prompt))

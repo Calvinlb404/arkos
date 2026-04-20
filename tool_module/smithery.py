@@ -157,12 +157,31 @@ class SmitheryClient:
             "method": method,
             "params": params or {},
         }
+        headers = self._headers()
+        headers["Accept"] = "application/json, text/event-stream"
+        
         logger.debug("smithery POST %s method=%s", url, method)
-        async with session.post(url, json=rpc_body, headers=self._headers()) as resp:
+        async with session.post(url, json=rpc_body, headers=headers) as resp:
             text = await resp.text()
             if resp.status >= 400:
                 raise SmitheryError(f"jsonrpc {method} {resp.status}: {text}")
-            data = await resp.json() if text else {}
+            
+            data = {}
+            if text:
+                import json
+                try:
+                    data = await resp.json(content_type=None)
+                except Exception:
+                    # Fallback for SSE format (text/event-stream)
+                    for line in text.splitlines():
+                        if line.startswith("data: "):
+                            try:
+                                parsed = json.loads(line[6:])
+                                if isinstance(parsed, dict) and ("result" in parsed or "error" in parsed):
+                                    data = parsed
+                                    break
+                            except json.JSONDecodeError:
+                                pass
             if "error" in data:
                 err = data["error"] or {}
                 raise SmitheryError(
