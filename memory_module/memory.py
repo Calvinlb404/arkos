@@ -135,63 +135,60 @@ class Memory:
         except Exception as e:
             print(f"[mem0 background] Error: {e}")
 
-    def add_memory(self, message) -> bool:
+    async def add_memory(self, message) -> bool:
         """Add a single turn to Postgres (fast) + Mem0 in background."""
+        import asyncio
         try:
             role = CLASS_TO_ROLE[type(message)]
+            serialized = self.serialize(message)
+            user_id, session_id = self.user_id, self.session_id
 
-            # Store in Postgres immediately (fast, using pool)
-            conn = self._pool.getconn()
-            try:
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    INSERT INTO conversation_context (user_id, session_id, role, message)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (self.user_id, self.session_id, role, self.serialize(message)),
-                )
-                conn.commit()
-                cur.close()
-            finally:
-                self._pool.putconn(conn)
+            def _insert():
+                conn = self._pool.getconn()
+                try:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """
+                        INSERT INTO conversation_context (user_id, session_id, role, message)
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (user_id, session_id, role, serialized),
+                    )
+                    conn.commit()
+                    cur.close()
+                finally:
+                    self._pool.putconn(conn)
+
+            await asyncio.to_thread(_insert)
 
             # Store in mem0 in background (non-blocking)
             if self.use_long_term and self._mem0 and message.content:
-                metadata = {
-                    "user_id": self.user_id,
-                    "session_id": self.session_id,
-                    "role": role,
-                }
+                metadata = {"user_id": user_id, "session_id": session_id, "role": role}
                 _executor.submit(self._add_to_mem0_background, message.content, metadata)
 
             return True
 
         except Exception:
             import traceback
-
             traceback.print_exc()
             return False
 
-    def retrieve_long_memory(self, context: list | None = None, mem0_limit: int = 10) -> SystemMessage:
+    async def retrieve_long_memory(self, context: list | None = None, mem0_limit: int = 10) -> SystemMessage:
         """Retrieve relevant long term memories for the current user."""
+        import asyncio
         if context is None:
             context = []
-        # Skip if long-term memory is disabled
         if not self.use_long_term or not self._mem0:
             return SystemMessage(content="")
 
         try:
-            # Build query from recent context only (faster)
             query = " ".join(m.content for m in context[-2:] if hasattr(m, "content"))
 
             if not query.strip():
                 return SystemMessage(content="")
 
-            results = self._mem0.search(
-                query=query,
-                user_id=self.user_id,
-                limit=mem0_limit,  # Reduced from 50 to 10
+            results = await asyncio.to_thread(
+                self._mem0.search, query=query, user_id=self.user_id, limit=mem0_limit
             )
 
             memory_entries = [f"{r.get('role', 'user')}: {r['memory']}" for r in results.get("results", [])]
@@ -206,31 +203,35 @@ class Memory:
             print(f"[retrieve_long_memory] Error: {e}")
             return SystemMessage(content="")
 
-    def retrieve_short_memory(self, turns):
+    async def retrieve_short_memory(self, turns):
         """Retrieve relevant short term memories for the current user"""
+        import asyncio
         try:
-            conn = self._pool.getconn()
-            try:
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    SELECT role, message
-                    FROM (
-                        SELECT id, role, message
-                        FROM conversation_context
-                        WHERE user_id = %s
-                        ORDER BY id DESC
-                        LIMIT %s
-                    ) sub
-                    ORDER BY id ASC
-                    """,
-                    (self.user_id, turns),
-                )
-                rows = cur.fetchall()
-                cur.close()
-            finally:
-                self._pool.putconn(conn)
+            def _fetch():
+                conn = self._pool.getconn()
+                try:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """
+                        SELECT role, message
+                        FROM (
+                            SELECT id, role, message
+                            FROM conversation_context
+                            WHERE user_id = %s
+                            ORDER BY id DESC
+                            LIMIT %s
+                        ) sub
+                        ORDER BY id ASC
+                        """,
+                        (self.user_id, turns),
+                    )
+                    rows = cur.fetchall()
+                    cur.close()
+                    return rows
+                finally:
+                    self._pool.putconn(conn)
 
+            rows = await asyncio.to_thread(_fetch)
             return [self.deserialize(message=msg, role=role) for role, msg in rows]
 
         except Exception as e:

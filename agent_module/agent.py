@@ -178,7 +178,7 @@ class Agent:
 
         return next_state_name
 
-    def add_context(self, messages):
+    async def add_context(self, messages):
         """
         processes incoming messages for memory module
         """
@@ -186,19 +186,19 @@ class Agent:
         assert isinstance(messages, list), "agent.py messages not a list"
 
         for message in messages:
-            self.memory.add_memory(message)
+            await self.memory.add_memory(message)
 
         return None
 
-    def get_context(self, turns=5, include_long_term=True):
+    async def get_context(self, turns=5, include_long_term=True):
         """
         Wrap long term and short term into context window.
         output: list of messages
         """
-        short_term_mem = self.memory.retrieve_short_memory(turns)
+        short_term_mem = await self.memory.retrieve_short_memory(turns)
 
         if include_long_term:
-            long_term_mem = self.memory.retrieve_long_memory(context=short_term_mem)
+            long_term_mem = await self.memory.retrieve_long_memory(context=short_term_mem)
             # Only include if it has content
             if long_term_mem and long_term_mem.content.strip():
                 return [long_term_mem] + short_term_mem
@@ -223,7 +223,7 @@ class Agent:
         self.current_user_id = user_id
 
         t0 = time.time()
-        self.add_context(messages)
+        await self.add_context(messages)
         print(f"[TIMING] add_context: {time.time() - t0:.3f}s")
 
         print("agent.py received message")
@@ -243,7 +243,7 @@ class Agent:
             retry_count += 1
 
             t0 = time.time()
-            context = self.get_context()
+            context = await self.get_context()
             print(f"[TIMING] get_context: {time.time() - t0:.3f}s")
 
             t0 = time.time()
@@ -254,13 +254,13 @@ class Agent:
                 assert isinstance(update, StateOutput), "State's output was not instance StateOutput"
                 self.last_state_output = update
                 if update.content:
-                    self.add_context([AIMessage(content=update.content)])
+                    await self.add_context([AIMessage(content=update.content)])
 
             if self.current_state.is_terminal:
                 print("REACHED TERMINAL")
                 break
 
-            messages_list = self.memory.retrieve_short_memory(5)
+            messages_list = await self.memory.retrieve_short_memory(5)
             if self.current_state.check_transition_ready(messages_list):
                 transition_dict = self.flow.get_transitions(self.current_state, messages_list)
                 transition_names = transition_dict["tt"]
@@ -298,7 +298,7 @@ class Agent:
             str: Characters/chunks from each state's output
         """
         self.current_user_id = user_id
-        self.add_context(messages)
+        await self.add_context(messages)
 
         print("agent.py [STREAM] received message")
         print("agent.py [STREAM] CURR STATE:", self.current_state)
@@ -315,7 +315,7 @@ class Agent:
                 break
             retry_count += 1
 
-            context = self.get_context()
+            context = await self.get_context()
 
             # Run the state normally (same as non-streaming step)
             try:
@@ -334,7 +334,7 @@ class Agent:
                 assert isinstance(update, StateOutput), "State's output was not instance StateOutput"
                 self.last_state_output = update
                 if update.content:
-                    self.add_context([AIMessage(content=update.content)])
+                    await self.add_context([AIMessage(content=update.content)])
                     print(f"agent.py [STREAM] Streaming {len(update.content)} chars")
                     for char in update.content:
                         yield char
@@ -345,7 +345,7 @@ class Agent:
                 break
 
             # Handle state transition (same logic as non-streaming step)
-            messages_list = self.memory.retrieve_short_memory(5)
+            messages_list = await self.memory.retrieve_short_memory(5)
             if self.current_state.check_transition_ready(messages_list):
                 transition_dict = self.flow.get_transitions(self.current_state, messages_list)
                 transition_names = transition_dict["tt"]

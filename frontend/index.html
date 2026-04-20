@@ -896,10 +896,12 @@
   // ---------- state ----------
   // approvals + tasks come from the DB; watching stays local until we wire a watchers table.
   let _lastRenderKey = '';
+  const _dismissedTasks = new Set(JSON.parse(localStorage.getItem('ark_dismissed_tasks') || '[]'));
 
   const state = {
     approvals: [],
     tasks: [],
+    completed: [],
     watching: [
       { id: 'w1', text: 'linear.app / team ark', when: 'every 5m' },
       { id: 'w2', text: 'mail.google.com / inbox', when: 'live' },
@@ -927,6 +929,7 @@
     const key = JSON.stringify({
       a: state.approvals.map((x) => x.approval_id),
       t: state.tasks.map((x) => x.id + '|' + x.status),
+      c: state.completed.map((x) => x.id),
       x: state.expandedTaskId,
       evLen: (state.taskEvents[state.expandedTaskId] || []).length,
     });
@@ -938,7 +941,7 @@
     const focusedId = focused && focused.id;
     const a = document.getElementById('approvalsList');
     a.innerHTML = '';
-    if (!state.approvals.length) {
+    if (!state.approvals.length && !state.completed.length) {
       a.innerHTML = '<div class="empty">no subagents waiting on you</div>';
     } else {
       for (const ap of state.approvals) {
@@ -968,6 +971,24 @@
         `;
         a.appendChild(el);
       }
+    }
+
+    // Completed task result cards — shown in approvals so the user sees the output.
+    for (const task of state.completed) {
+      const el = document.createElement('div');
+      el.className = 'card';
+      el.innerHTML = `
+        <div class="meta">
+          <span class="tag" style="color:var(--ok);border-color:var(--ok)">done</span>
+          <span>${escapeHtml(task.when)} ago</span>
+        </div>
+        <div class="title">${escapeHtml(task.text)}</div>
+        ${task.summary ? `<div class="plan">${escapeHtml(task.summary)}</div>` : ''}
+        <div class="actions">
+          <button class="mini" data-dismiss-task="${task.id}">dismiss</button>
+        </div>
+      `;
+      a.appendChild(el);
     }
 
     const t = document.getElementById('tasksList');
@@ -1173,6 +1194,18 @@
         console.warn('approval respond error', err);
       }
       await refreshTasks();
+      return;
+    }
+
+    // dismiss completed task card
+    const dismissBtn = e.target.closest('[data-dismiss-task]');
+    if (dismissBtn) {
+      const id = dismissBtn.dataset.dismissTask;
+      _dismissedTasks.add(id);
+      localStorage.setItem('ark_dismissed_tasks', JSON.stringify([..._dismissedTasks]));
+      state.completed = state.completed.filter((t) => t.id !== id);
+      _lastRenderKey = '';
+      render();
       return;
     }
 
@@ -1454,12 +1487,13 @@
   async function refreshTasks() {
     if (!CONFIG.token) return;
     try {
-      const [runningRes, waitingRes, approvalsRes] = await Promise.all([
+      const [runningRes, waitingRes, approvalsRes, completedRes] = await Promise.all([
         fetch(`${CONFIG.backend}/tasks?status=running`, { headers: authHeaders() }),
         fetch(`${CONFIG.backend}/tasks?status=awaiting_approval`, { headers: authHeaders() }),
         fetch(`${CONFIG.backend}/tasks/approvals/pending`, { headers: authHeaders() }),
+        fetch(`${CONFIG.backend}/tasks?status=completed`, { headers: authHeaders() }),
       ]);
-      if ([runningRes, waitingRes, approvalsRes].some((r) => r.status === 401)) {
+      if ([runningRes, waitingRes, approvalsRes, completedRes].some((r) => r.status === 401)) {
         localStorage.removeItem('ark_token');
         location.reload();
         return;
@@ -1467,6 +1501,7 @@
       const running = runningRes.ok ? await runningRes.json() : { tasks: [] };
       const waiting = waitingRes.ok ? await waitingRes.json() : { tasks: [] };
       const approvals = approvalsRes.ok ? await approvalsRes.json() : { approvals: [] };
+      const completedAll = completedRes.ok ? await completedRes.json() : { tasks: [] };
 
       const combined = [...(running.tasks || []), ...(waiting.tasks || [])];
       state.tasks = combined.map((t) => ({
@@ -1482,6 +1517,17 @@
         kind: a.kind,
         prompt: a.prompt,
       }));
+
+      // Show tasks completed in the last 10 minutes so the user sees the result.
+      const tenMinAgo = Date.now() - 10 * 60 * 1000;
+      state.completed = (completedAll.tasks || [])
+        .filter((t) => new Date(t.updated_at).getTime() > tenMinAgo && !_dismissedTasks.has(t.task_id))
+        .map((t) => ({
+          id: t.task_id,
+          text: t.title || 'task',
+          summary: t.context_payload?.summary || '',
+          when: relTime(t.updated_at),
+        }));
 
       // Refresh events for an expanded task so the log stays live.
       if (state.expandedTaskId) {

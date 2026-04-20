@@ -144,7 +144,7 @@ class StateApproval(State):
 
         # Record the human answer as a UserMessage so the next step's LLM sees it
         try:
-            agent.memory.add_memory(
+            await agent.memory.add_memory(
                 UserMessage(content=f"[human answer for '{prompt}']: {answer_text}")
             )
         except Exception as e:

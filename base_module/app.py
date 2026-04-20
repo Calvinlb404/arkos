@@ -46,19 +46,42 @@ else:
     print(f"[ark] no frontend folder at {_FRONTEND_DIR}; /app route disabled")
 
 
-# Initialize the agent and dependencies once
-
+# Shared singletons (no per-user state)
 flow = StateHandler(yaml_path=config.get("state.graph_path"))
-
-memory = Memory(
-    user_id=config.get("memory.user_id"),
-    session_id=None,
-    db_url=config.get("database.url"),
-    use_long_term=config.get("memory.use_long_term", False),
-)
-
-# ArkModelLink now uses AsyncOpenAI internally
 llm = ArkModelLink(base_url=config.get("llm.base_url"), max_tokens=config.get("llm.max_tokens"))
+
+# Per-user memory cache — keyed by user_id string.
+# Memory.__init__ initialises mem0 (expensive), so we create once per user and reuse.
+_memory_cache: dict[str, Memory] = {}
+
+# Module-level prompt + tools, written by startup/refresh, stamped onto each per-request agent.
+_system_prompt: str = ""
+_available_tools: dict = {}
+
+
+def _get_or_create_memory(user_id: str) -> Memory:
+    if user_id not in _memory_cache:
+        _memory_cache[user_id] = Memory(
+            user_id=user_id,
+            session_id=None,
+            db_url=config.get("database.url"),
+            use_long_term=config.get("memory.use_long_term", False),
+        )
+    return _memory_cache[user_id]
+
+
+def _make_agent(user_id: str) -> Agent:
+    """Create a fresh Agent for one request. Memory is cached per user; everything else is shared."""
+    ag = Agent(
+        agent_id=user_id,
+        flow=flow,
+        memory=_get_or_create_memory(user_id),
+        llm=llm,
+        tool_manager=tool_manager,
+    )
+    ag.system_prompt = _system_prompt
+    ag.available_tools = _available_tools
+    return ag
 
 
 # MCP connectivity. Everything flows through Smithery Connect; per-user OAuth
@@ -75,13 +98,6 @@ if tool_manager is None:
         print("[ark] SMITHERY_API_KEY missing; MCP tool manager disabled")
     elif not mcp_config:
         print("[ark] no mcp_servers configured; tool manager disabled")
-agent = Agent(
-    agent_id=config.get("memory.user_id"),
-    flow=flow,
-    memory=memory,
-    llm=llm,
-    tool_manager=tool_manager,
-)
 
 
 def format_tools_for_system_prompt(tools_by_server: dict, deferred: list[dict] | None = None) -> str:
@@ -107,19 +123,18 @@ def format_tools_for_system_prompt(tools_by_server: dict, deferred: list[dict] |
                 continue
             lines.append(f"# Service: {server_name}")
             for tool_name, tool in server_tools.items():
-                lines.append(f"Tool name: {tool_name}")
                 if isinstance(tool, dict):
                     desc = tool.get("description") or ""
-                    schema = tool.get("inputSchema") or tool.get("input_schema")
                 else:
                     desc = getattr(tool, "description", "") or ""
-                    schema = getattr(tool, "input_schema", None)
-                if desc:
-                    lines.append(f"Description: {desc.strip()}")
-                if schema:
-                    lines.append("Input schema:")
-                    lines.append(str(schema))
-                lines.append("")
+                # One line per tool: name + short description only. Full schemas
+                # bloat the system prompt past the model's context window.
+                desc_short = desc.strip().splitlines()[0][:120] if desc.strip() else ""
+                if desc_short:
+                    lines.append(f"- {tool_name}: {desc_short}")
+                else:
+                    lines.append(f"- {tool_name}")
+            lines.append("")
 
     if deferred:
         real_deferred = [svc for svc in deferred if svc.get("service") not in (tools_by_server or {})]
@@ -162,15 +177,16 @@ def _list_deferred_services() -> list[dict]:
 @app.on_event("startup")
 async def startup():
     """Initialize MCP servers and build the agent's system prompt with available tools."""
+    global _system_prompt, _available_tools
     base_system_prompt = (config.get("app.system_prompt") or "").strip()
 
     if tool_manager:
         await tool_manager.initialize_servers()
 
-        agent.available_tools = await tool_manager.list_all_tools()
+        _available_tools = await tool_manager.list_all_tools()
 
-        shared_tools = sum(len(tools) for tools in agent.available_tools.values())
-        shared_servers = [s for s, tools in agent.available_tools.items() if tools]
+        shared_tools = sum(len(tools) for tools in _available_tools.values())
+        shared_servers = [s for s, tools in _available_tools.items() if tools]
         deferred = _list_deferred_services()
 
         print(
@@ -182,10 +198,10 @@ async def startup():
         if deferred:
             print(f"[ark]   deferred (needs user OAuth): {', '.join(s['service'] for s in deferred)}")
 
-        tool_prompt = format_tools_for_system_prompt(agent.available_tools, deferred=deferred)
-        agent.system_prompt = base_system_prompt + "\n\n" + tool_prompt if base_system_prompt else tool_prompt
+        tool_prompt = format_tools_for_system_prompt(_available_tools, deferred=deferred)
+        _system_prompt = base_system_prompt + "\n\n" + tool_prompt if base_system_prompt else tool_prompt
     else:
-        agent.system_prompt = base_system_prompt
+        _system_prompt = base_system_prompt
 
     # Resume any subagent tasks that were in-flight before a restart.
     try:
@@ -205,7 +221,7 @@ async def list_services(request: Request):
     for the calling user, plus every no-auth shared service. The frontend
     uses this to render a connections panel with Smithery setup links.
     """
-    user_id = request.headers.get("X-User-ID") or config.get("memory.user_id")
+    user_id = request.headers.get("X-User-ID") or config.get("memory.fallback_user_id")
 
     if not tool_manager:
         return JSONResponse(content={"user_id": user_id, "shared": [], "per_user": []})
@@ -230,15 +246,16 @@ async def list_services(request: Request):
 
 
 async def _refresh_system_prompt() -> None:
-    """Rebuild agent.system_prompt from the current tool_manager state.
+    """Rebuild _system_prompt from the current tool_manager state.
     Called after a connection change so buddy picks up the new tools."""
+    global _system_prompt, _available_tools
     if not tool_manager:
         return
-    agent.available_tools = await tool_manager.list_all_tools()
+    _available_tools = await tool_manager.list_all_tools()
     deferred = _list_deferred_services()
-    tool_prompt = format_tools_for_system_prompt(agent.available_tools, deferred=deferred)
+    tool_prompt = format_tools_for_system_prompt(_available_tools, deferred=deferred)
     base = (config.get("app.system_prompt") or "").strip()
-    agent.system_prompt = base + "\n\n" + tool_prompt if base else tool_prompt
+    _system_prompt = base + "\n\n" + tool_prompt if base else tool_prompt
 
 
 def _callback_return_url(request: Request, service: str, user_id: str) -> str:
@@ -268,7 +285,7 @@ async def connect_service(service: str, request: Request):
     in pointing at /oauth/callback/{service}, so when the user finishes
     OAuth on Smithery's hosted page they get bounced back into the ark app.
     """
-    user_id = request.headers.get("X-User-ID") or config.get("memory.user_id")
+    user_id = request.headers.get("X-User-ID") or config.get("memory.fallback_user_id")
 
     if not tool_manager:
         return JSONResponse(
@@ -313,7 +330,7 @@ async def connect_service(service: str, request: Request):
 async def disconnect_service(service: str, request: Request):
     """Forget a per-user connection client-side. Smithery retains the token
     until the user revokes it there; we just stop tracking/surfacing it."""
-    user_id = request.headers.get("X-User-ID") or config.get("memory.user_id")
+    user_id = request.headers.get("X-User-ID") or config.get("memory.fallback_user_id")
     if not tool_manager:
         return JSONResponse(content={"error": "tool manager disabled"}, status_code=503)
 
@@ -340,7 +357,7 @@ async def oauth_callback(service: str, request: Request):
     """
     from fastapi.responses import HTMLResponse
 
-    user_id = request.query_params.get("user_id") or config.get("memory.user_id")
+    user_id = request.query_params.get("user_id") or config.get("memory.fallback_user_id")
     status = "connected"
     error_msg: str | None = None
 
@@ -473,8 +490,11 @@ async def chat_completions(request: Request):
                     pass  # auth_required is expected if user hasn't connected yet
         await _refresh_system_prompt()
 
+    effective_user_id = user_id or config.get("memory.fallback_user_id")
+    req_agent = _make_agent(effective_user_id)
+
     context_msgs = []
-    context_msgs.append(SystemMessage(content=agent.system_prompt))
+    context_msgs.append(SystemMessage(content=_system_prompt))
 
     # Convert OAI messages into internal message objects
     for msg in messages:
@@ -493,7 +513,7 @@ async def chat_completions(request: Request):
         async def generate_stream():
             """Yield SSE chunks in OpenAI streaming format."""
             chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-            async for chunk in agent.step_stream(context_msgs, user_id=user_id):
+            async for chunk in req_agent.step_stream(context_msgs, user_id=effective_user_id):
                 data = {
                     "id": chunk_id,
                     "object": "chat.completion.chunk",
@@ -532,7 +552,7 @@ async def chat_completions(request: Request):
         )
 
     # Non-streaming response
-    agent_response = await agent.step(context_msgs, user_id=user_id)
+    agent_response = await req_agent.step(context_msgs, user_id=effective_user_id)
     final_msg = agent_response or AIMessage(content="(no response)")
 
     completion = {

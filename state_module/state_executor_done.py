@@ -30,15 +30,38 @@ class StateExecutorDone(State):
         return True
 
     async def run(self, context, agent=None):
+        from model_module.ArkModelNew import SystemMessage
+
         task_id = getattr(agent, "task_id", None)
-        # TaskRunner reads this string as the final summary
         plan_steps = getattr(agent, "plan_steps", []) or []
         step_idx = getattr(agent, "step_idx", 0)
 
-        if step_idx >= len(plan_steps):
-            summary = f"Finished all {len(plan_steps)} plan steps."
-        else:
-            summary = f"Stopped at step {step_idx + 1} of {len(plan_steps)}."
+        # Ask the LLM to produce a user-facing summary of what was actually done.
+        # The context contains all tool results stored by add_context during execution.
+        try:
+            system = SystemMessage(
+                content=(
+                    "You are summarising the results of a completed task for the user.\n"
+                    "Based on the conversation above (which contains tool call results), "
+                    "write a clear, concise summary of what was found or accomplished. "
+                    "Include the actual data returned (e.g. event names, times, titles). "
+                    "Do not say 'the task is complete' — just present the results naturally. "
+                    "Keep it under 200 words."
+                )
+            )
+            output = await agent.call_llm(context=list(context) + [system], json_schema=None)
+            summary = (output.content or "").strip() if output else ""
+        except Exception as e:
+            summary = ""
+            if task_id:
+                log_event(task_id, "error", f"summary LLM call failed: {e}")
+
+        if not summary:
+            summary = (
+                f"Finished all {len(plan_steps)} plan steps."
+                if step_idx >= len(plan_steps)
+                else f"Stopped at step {step_idx + 1} of {len(plan_steps)}."
+            )
 
         if task_id:
             log_event(task_id, "done", summary, payload={"step_idx": step_idx, "total": len(plan_steps)})
