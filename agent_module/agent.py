@@ -46,6 +46,11 @@ class Agent:
         self.available_tools = {}
         self.current_user_id = None  # Set per-request for per-user tool auth
         self.last_state_output: StateOutput | None = None
+        # Subagents override these. The executor graph uses them to iterate plan steps.
+        self.task_id: str | None = None
+        self.plan_steps: list[str] = []
+        self.step_idx: int = 0
+        self.max_iter: int = MAX_ITER
 
     # def bind_tool(self, tool):
     #
@@ -173,7 +178,7 @@ class Agent:
 
         return next_state_name
 
-    def add_context(self, messages):
+    async def add_context(self, messages):
         """
         processes incoming messages for memory module
         """
@@ -181,19 +186,19 @@ class Agent:
         assert isinstance(messages, list), "agent.py messages not a list"
 
         for message in messages:
-            self.memory.add_memory(message)
+            await self.memory.add_memory(message)
 
         return None
 
-    def get_context(self, turns=5, include_long_term=True):
+    async def get_context(self, turns=5, include_long_term=True):
         """
         Wrap long term and short term into context window.
         output: list of messages
         """
-        short_term_mem = self.memory.retrieve_short_memory(turns)
+        short_term_mem = await self.memory.retrieve_short_memory(turns)
 
         if include_long_term:
-            long_term_mem = self.memory.retrieve_long_memory(context=short_term_mem)
+            long_term_mem = await self.memory.retrieve_long_memory(context=short_term_mem)
             # Only include if it has content
             if long_term_mem and long_term_mem.content.strip():
                 return [long_term_mem] + short_term_mem
@@ -218,7 +223,7 @@ class Agent:
         self.current_user_id = user_id
 
         t0 = time.time()
-        self.add_context(messages)
+        await self.add_context(messages)
         print(f"[TIMING] add_context: {time.time() - t0:.3f}s")
 
         print("agent.py received message")
@@ -232,13 +237,13 @@ class Agent:
             loop_start = time.time()
             print(f"Inner loop #{retry_count + 1}")
 
-            if retry_count > MAX_ITER:
+            if retry_count > self.max_iter:
                 print("MAX ITER REACHED")
                 break
             retry_count += 1
 
             t0 = time.time()
-            context = self.get_context()
+            context = await self.get_context()
             print(f"[TIMING] get_context: {time.time() - t0:.3f}s")
 
             t0 = time.time()
@@ -249,18 +254,26 @@ class Agent:
                 assert isinstance(update, StateOutput), "State's output was not instance StateOutput"
                 self.last_state_output = update
                 if update.content:
-                    self.add_context([AIMessage(content=update.content)])
+                    await self.add_context([AIMessage(content=update.content)])
 
             if self.current_state.is_terminal:
                 print("REACHED TERMINAL")
                 break
 
-            messages_list = self.memory.retrieve_short_memory(5)
+            messages_list = await self.memory.retrieve_short_memory(5)
             if self.current_state.check_transition_ready(messages_list):
                 transition_dict = self.flow.get_transitions(self.current_state, messages_list)
                 transition_names = transition_dict["tt"]
 
-                if len(transition_names) == 1:
+                # Deterministic override: a state can force the next transition
+                # by putting "next_state" into StateOutput.structured_data. This is
+                # how executor-style graphs bypass LLM-guided transition choice.
+                forced = None
+                if update and isinstance(update.structured_data, dict):
+                    forced = update.structured_data.get("next_state")
+                if forced and forced in transition_names:
+                    next_state_name = forced
+                elif len(transition_names) == 1:
                     next_state_name = transition_names[0]
                 else:
                     next_state_name = await self.choose_transition(transition_dict, messages_list)
@@ -274,7 +287,7 @@ class Agent:
 
         print(f"[TIMING] step total: {time.time() - step_start:.3f}s")
         print("LAST_STATE_OUTPUT", self.last_state_output)
-        self.current_state = self.flow.get_state("agent_reply")
+        self.current_state = self.flow.get_initial_state()
         return self.last_state_output
 
     async def step_stream(self, messages, user_id: str = None):
@@ -285,7 +298,7 @@ class Agent:
             str: Characters/chunks from each state's output
         """
         self.current_user_id = user_id
-        self.add_context(messages)
+        await self.add_context(messages)
 
         print("agent.py [STREAM] received message")
         print("agent.py [STREAM] CURR STATE:", self.current_state)
@@ -296,13 +309,13 @@ class Agent:
         while True:
             print(f"agent.py [STREAM] Inner loop - State: {self.current_state.name}")
 
-            if retry_count > MAX_ITER:
+            if retry_count > self.max_iter:
                 print("agent.py [STREAM] MAX ITER REACHED")
                 yield "\n[Max iterations reached]"
                 break
             retry_count += 1
 
-            context = self.get_context()
+            context = await self.get_context()
 
             # Run the state normally (same as non-streaming step)
             try:
@@ -321,7 +334,7 @@ class Agent:
                 assert isinstance(update, StateOutput), "State's output was not instance StateOutput"
                 self.last_state_output = update
                 if update.content:
-                    self.add_context([AIMessage(content=update.content)])
+                    await self.add_context([AIMessage(content=update.content)])
                     print(f"agent.py [STREAM] Streaming {len(update.content)} chars")
                     for char in update.content:
                         yield char
@@ -332,13 +345,18 @@ class Agent:
                 break
 
             # Handle state transition (same logic as non-streaming step)
-            messages_list = self.memory.retrieve_short_memory(5)
+            messages_list = await self.memory.retrieve_short_memory(5)
             if self.current_state.check_transition_ready(messages_list):
                 transition_dict = self.flow.get_transitions(self.current_state, messages_list)
                 transition_names = transition_dict["tt"]
                 print(f"agent.py [STREAM] Transitions: {transition_names}")
 
-                if len(transition_names) == 1:
+                forced = None
+                if update and isinstance(update.structured_data, dict):
+                    forced = update.structured_data.get("next_state")
+                if forced and forced in transition_names:
+                    next_state_name = forced
+                elif len(transition_names) == 1:
                     next_state_name = transition_names[0]
                 else:
                     next_state_name = await self.choose_transition(transition_dict, messages_list)
@@ -354,9 +372,7 @@ class Agent:
                 break
 
         print("agent.py [STREAM] Complete")
-        self.current_state = self.flow.get_state("agent_reply")
-
-        self.current_state = self.flow.get_state("agent_reply")
+        self.current_state = self.flow.get_initial_state()
 
 
 if __name__ == "__main__":
