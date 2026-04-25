@@ -1,14 +1,26 @@
 name: Deploy
 
-# Deploys the ArkOS app as a Docker container on ark.mit.edu.
-# Uses the kshitij user (who has docker group access) — no sudo needed.
+# DISABLED. Renamed from deploy.yml to deploy.yml.disabled because GitHub
+# Actions only schedules files matching .github/workflows/*.yml.
+# To re-enable: `git mv deploy.yml.disabled deploy.yml` and re-publish the
+# image to GHCR (also disabled in ci.yml — see that file's git history).
 #
-# BEFORE THIS WORKS, you need to configure:
-#   1. GitHub repo secret: SSH_PRIVATE_KEY (private key for kshitij@ark.mit.edu)
-#   2. On ark.mit.edu: the corresponding public key in ~/.ssh/authorized_keys
-#   3. On ark.mit.edu: /home/kshitij/arkos/.env file with DB_URL, OPENAI_API_KEY, etc.
-#   4. Either: make the ghcr.io/sgiark/arkos package public
-#      OR: run `docker login ghcr.io` once on ark.mit.edu as kshitij
+# Why disabled: there's no production product to deploy yet. The MCP/agent
+# stack works in dev but isn't in a "ship it on every main push" state.
+# Keeping the workflow file in tree (not deleting) so we don't have to
+# re-derive the deploy plumbing from scratch when we're ready.
+#
+# BEFORE THIS WORKS, you also need to configure:
+#   1. Switch DEPLOY_USER from kshitij to arkos (the service account
+#      nmorgan provisioned post-merge of PR #190 follow-ups).
+#   2. GitHub repo secret: SSH_PRIVATE_KEY (private key for arkos@ark.mit.edu)
+#   3. On ark.mit.edu: the corresponding public key in ~/.ssh/authorized_keys
+#      for the arkos user.
+#   4. On ark.mit.edu: /home/arkos/arkos/.env file with DB_URL,
+#      OPENAI_API_KEY, SMITHERY_API_KEY, etc.
+#   5. Either: make the ghcr.io/sgiark/arkos package public
+#      OR: run `docker login ghcr.io` once on ark.mit.edu as arkos.
+#   6. Verify the server's root disk has space (was 99% full last check).
 
 on:
   push:
