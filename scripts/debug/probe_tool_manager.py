@@ -1,13 +1,15 @@
 import asyncio
-import os
 import sys
 
 sys.path.append("/home/nmorgan/dev/arkos")
 from dotenv import load_dotenv
+
 load_dotenv("/home/nmorgan/dev/arkos/.env")
 
-from base_module.app import tool_manager
 import aiohttp
+
+from base_module.app import tool_manager
+
 
 async def main():
     await tool_manager.initialize_servers()

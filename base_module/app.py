@@ -20,8 +20,8 @@ from config_module.loader import config
 from memory_module.memory import Memory
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage
 from state_module.state_handler import StateHandler
-from tool_module.tool_call import MCPToolManager
 from tool_module.smithery import AuthRequiredError
+from tool_module.tool_call import MCPToolManager
 
 app = FastAPI(title="ArkOS Agent API", version="1.0.0")
 
@@ -141,7 +141,10 @@ def format_tools_for_system_prompt(tools_by_server: dict, deferred: list[dict] |
         if real_deferred:
             lines.append("The following services are configured but not yet connected for the current user.")
             lines.append("You cannot call their tools until the user completes the Smithery OAuth flow.")
-            lines.append("If the user asks for something that needs one of these, tell them it needs to be connected first and share the setup URL:")
+            lines.append(
+                "If the user asks for something that needs one of these, tell them it "
+                "needs to be connected first and share the setup URL:"
+            )
             lines.append("")
             for svc in real_deferred:
                 nm = svc.get("name") or svc.get("service")
@@ -149,7 +152,10 @@ def format_tools_for_system_prompt(tools_by_server: dict, deferred: list[dict] |
                 if url:
                     lines.append(f"- {nm} (service id: {svc.get('service')}): connect via {url}")
                 else:
-                    lines.append(f"- {nm} (service id: {svc.get('service')}): needs connection; direct the user to the ark connections panel")
+                    lines.append(
+                        f"- {nm} (service id: {svc.get('service')}): "
+                        "needs connection; direct the user to the ark connections panel"
+                    )
             lines.append("")
 
     return "\n".join(lines)
@@ -228,7 +234,7 @@ async def list_services(request: Request):
 
     # Shared (no-auth) services are whatever initialize_servers() connected.
     shared = []
-    for server_name in (tool_manager._shared_tools or {}).keys():
+    for server_name in tool_manager._shared_tools or {}:
         shared.append(
             {
                 "service": server_name,
@@ -237,10 +243,7 @@ async def list_services(request: Request):
             }
         )
 
-    per_user = [
-        {"service": svc, **info}
-        for svc, info in tool_manager.get_user_service_status(user_id).items()
-    ]
+    per_user = [{"service": svc, **info} for svc, info in tool_manager.get_user_service_status(user_id).items()]
 
     return JSONResponse(content={"user_id": user_id, "shared": shared, "per_user": per_user})
 
@@ -475,6 +478,8 @@ async def chat_completions(request: Request):
     # has already authorized.  This populates tool_manager._user_tools so
     # the system prompt includes their tools instead of a "please connect" stub.
     if tool_manager and user_id:
+        import contextlib
+
         import aiohttp as _aiohttp
 
         async with _aiohttp.ClientSession() as _sess:
@@ -484,10 +489,9 @@ async def chat_completions(request: Request):
                 # Skip if already loaded for this user
                 if svc_name in (tool_manager._user_tools.get(user_id) or {}):
                     continue
-                try:
+                # auth_required is expected if user hasn't connected yet
+                with contextlib.suppress(Exception):
                     await tool_manager._ensure_user_server(_sess, user_id, svc_name)
-                except Exception:
-                    pass  # auth_required is expected if user hasn't connected yet
         await _refresh_system_prompt()
 
     effective_user_id = user_id or config.get("memory.fallback_user_id")

@@ -93,11 +93,7 @@ async def _run_task_inner(task_id: str) -> None:
     plan_steps = payload.get("plan_steps") or []
     if not plan_steps and plan_text:
         # fall back: split a "1. foo\n2. bar" blob into lines
-        plan_steps = [
-            line.split(". ", 1)[-1].strip()
-            for line in plan_text.splitlines()
-            if line.strip()
-        ]
+        plan_steps = [line.split(". ", 1)[-1].strip() for line in plan_text.splitlines() if line.strip()]
 
     if not plan_steps:
         log_event(task_id, "error", "task has no plan_steps; nothing to execute")

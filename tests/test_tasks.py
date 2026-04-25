@@ -26,11 +26,7 @@ def clear_tasks():
 class TestCreateTask:
     def test_post_returns_200_with_task_id(self, client):
         """POST /tasks returns 200 with task_id"""
-        payload = {
-            "user_id": "test-user",
-            "required_tools": ["tool1", "tool2"],
-            "context_payload": {"key": "value"}
-        }
+        payload = {"user_id": "test-user", "required_tools": ["tool1", "tool2"], "context_payload": {"key": "value"}}
         response = client.post("/tasks", json=payload)
 
         assert response.status_code == 200
@@ -128,10 +124,7 @@ class TestUpdateTaskStatus:
         task_id = create_resp.json()["task_id"]
 
         for status in ["pending", "running", "completed", "failed", "cancelled"]:
-            response = client.patch(
-                f"/tasks/{task_id}/status",
-                json={"status": status}
-            )
+            response = client.patch(f"/tasks/{task_id}/status", json={"status": status})
             assert response.status_code == 200
             assert response.json()["status"] == status
 
@@ -152,11 +145,9 @@ class TestTaskTimestamps:
 
         # Update status
         import time
+
         time.sleep(0.1)  # Ensure time difference
-        update_resp = client.patch(
-            f"/tasks/{task_id}/status",
-            json={"status": "running"}
-        )
+        update_resp = client.patch(f"/tasks/{task_id}/status", json={"status": "running"})
         updated_at = update_resp.json()["updated_at"]
 
         assert updated_at != created_at

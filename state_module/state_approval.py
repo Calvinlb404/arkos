@@ -18,8 +18,6 @@ import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from model_module.ArkModelNew import UserMessage  # noqa: E402
-
 from base_module.task_store import (  # noqa: E402
     create_approval,
     get_approval,
@@ -28,6 +26,7 @@ from base_module.task_store import (  # noqa: E402
     set_task_status,
 )
 from config_module.loader import config  # noqa: E402
+from model_module.ArkModelNew import UserMessage  # noqa: E402
 from state_module.base_state import StateOutput  # noqa: E402
 from state_module.state import State  # noqa: E402
 from state_module.state_registry import register_state  # noqa: E402
@@ -144,9 +143,7 @@ class StateApproval(State):
 
         # Record the human answer as a UserMessage so the next step's LLM sees it
         try:
-            await agent.memory.add_memory(
-                UserMessage(content=f"[human answer for '{prompt}']: {answer_text}")
-            )
+            await agent.memory.add_memory(UserMessage(content=f"[human answer for '{prompt}']: {answer_text}"))
         except Exception as e:
             log_event(task_id, "error", f"could not write answer to memory: {e}")
 

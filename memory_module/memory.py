@@ -138,6 +138,7 @@ class Memory:
     async def add_memory(self, message) -> bool:
         """Add a single turn to Postgres (fast) + Mem0 in background."""
         import asyncio
+
         try:
             role = CLASS_TO_ROLE[type(message)]
             serialized = self.serialize(message)
@@ -170,12 +171,14 @@ class Memory:
 
         except Exception:
             import traceback
+
             traceback.print_exc()
             return False
 
     async def retrieve_long_memory(self, context: list | None = None, mem0_limit: int = 10) -> SystemMessage:
         """Retrieve relevant long term memories for the current user."""
         import asyncio
+
         if context is None:
             context = []
         if not self.use_long_term or not self._mem0:
@@ -187,9 +190,7 @@ class Memory:
             if not query.strip():
                 return SystemMessage(content="")
 
-            results = await asyncio.to_thread(
-                self._mem0.search, query=query, user_id=self.user_id, limit=mem0_limit
-            )
+            results = await asyncio.to_thread(self._mem0.search, query=query, user_id=self.user_id, limit=mem0_limit)
 
             memory_entries = [f"{r.get('role', 'user')}: {r['memory']}" for r in results.get("results", [])]
 
@@ -206,7 +207,9 @@ class Memory:
     async def retrieve_short_memory(self, turns):
         """Retrieve relevant short term memories for the current user"""
         import asyncio
+
         try:
+
             def _fetch():
                 conn = self._pool.getconn()
                 try:

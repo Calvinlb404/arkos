@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import os
 import sys
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
@@ -39,10 +39,10 @@ from state_module.state import State  # noqa: E402
 from state_module.state_registry import register_state  # noqa: E402
 
 
-class _Route(str, Enum):
-    reply = "reply"   # stay in chat; just say `final`
-    ask = "ask"       # stay in chat; ask a clarifying question
-    plan = "plan"     # hand off to workshop_plan
+class _Route(StrEnum):
+    reply = "reply"  # stay in chat; just say `final`
+    ask = "ask"  # stay in chat; ask a clarifying question
+    plan = "plan"  # hand off to workshop_plan
 
 
 class ReasonedOutput(BaseModel):
