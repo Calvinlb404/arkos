@@ -145,41 +145,52 @@ class TestCallLLM:
 
 
 class TestAddContext:
-    def test_adds_messages_to_memory(self, agent):
+    @pytest.mark.asyncio
+    async def test_adds_messages_to_memory(self, agent):
+        agent.memory.add_memory = AsyncMock()
         msgs = [UserMessage(content="hello"), AIMessage(content="hi")]
-        agent.add_context(msgs)
+        await agent.add_context(msgs)
         assert agent.memory.add_memory.call_count == 2
 
-    def test_empty_list(self, agent):
-        agent.add_context([])
+    @pytest.mark.asyncio
+    async def test_empty_list(self, agent):
+        agent.memory.add_memory = AsyncMock()
+        await agent.add_context([])
         agent.memory.add_memory.assert_not_called()
 
-    def test_raises_on_non_list(self, agent):
+    @pytest.mark.asyncio
+    async def test_raises_on_non_list(self, agent):
         with pytest.raises(AssertionError):
-            agent.add_context("not a list")
+            await agent.add_context("not a list")
 
 
 class TestGetContext:
-    def test_short_term_only(self, agent):
-        agent.memory.retrieve_short_memory.return_value = [UserMessage(content="msg1")]
+    @pytest.mark.asyncio
+    async def test_short_term_only(self, agent):
+        agent.memory.retrieve_short_memory = AsyncMock(return_value=[UserMessage(content="msg1")])
+        agent.memory.retrieve_long_memory = AsyncMock()
 
-        result = agent.get_context(turns=5, include_long_term=False)
+        result = await agent.get_context(turns=5, include_long_term=False)
         assert len(result) == 1
         agent.memory.retrieve_long_memory.assert_not_called()
 
-    def test_with_long_term(self, agent):
-        agent.memory.retrieve_short_memory.return_value = [UserMessage(content="hi")]
-        agent.memory.retrieve_long_memory.return_value = SystemMessage(content="remembered: user likes blue")
+    @pytest.mark.asyncio
+    async def test_with_long_term(self, agent):
+        agent.memory.retrieve_short_memory = AsyncMock(return_value=[UserMessage(content="hi")])
+        agent.memory.retrieve_long_memory = AsyncMock(
+            return_value=SystemMessage(content="remembered: user likes blue")
+        )
 
-        result = agent.get_context(turns=5, include_long_term=True)
+        result = await agent.get_context(turns=5, include_long_term=True)
         assert len(result) == 2
         assert isinstance(result[0], SystemMessage)
 
-    def test_empty_long_term_excluded(self, agent):
-        agent.memory.retrieve_short_memory.return_value = [UserMessage(content="hi")]
-        agent.memory.retrieve_long_memory.return_value = SystemMessage(content="")
+    @pytest.mark.asyncio
+    async def test_empty_long_term_excluded(self, agent):
+        agent.memory.retrieve_short_memory = AsyncMock(return_value=[UserMessage(content="hi")])
+        agent.memory.retrieve_long_memory = AsyncMock(return_value=SystemMessage(content=""))
 
-        result = agent.get_context(turns=5, include_long_term=True)
+        result = await agent.get_context(turns=5, include_long_term=True)
         assert len(result) == 1  # Long-term excluded because empty
 
 
