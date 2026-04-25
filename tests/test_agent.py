@@ -177,9 +177,7 @@ class TestGetContext:
     @pytest.mark.asyncio
     async def test_with_long_term(self, agent):
         agent.memory.retrieve_short_memory = AsyncMock(return_value=[UserMessage(content="hi")])
-        agent.memory.retrieve_long_memory = AsyncMock(
-            return_value=SystemMessage(content="remembered: user likes blue")
-        )
+        agent.memory.retrieve_long_memory = AsyncMock(return_value=SystemMessage(content="remembered: user likes blue"))
 
         result = await agent.get_context(turns=5, include_long_term=True)
         assert len(result) == 2
