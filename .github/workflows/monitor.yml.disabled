@@ -1,11 +1,16 @@
 name: Monitor
 
-# Pings the production server every 30 minutes.
-# GitHub sends an email notification if the workflow fails.
+# DISABLED. Renamed from monitor.yml to monitor.yml.disabled because
+# GitHub Actions only schedules files matching .github/workflows/*.yml.
+# To re-enable: `git mv monitor.yml.disabled monitor.yml`.
+#
+# Why disabled: there's nothing live to monitor. The deploy workflow is
+# also disabled, so the production /health endpoint this would ping
+# doesn't exist yet.
 #
 # BEFORE THIS WORKS, you need to configure:
-#   1. GitHub repo secret: MONITOR_URL (e.g. https://ark.mit.edu:1112)
-#      OR update the URL below to match your deployment.
+#   1. GitHub repo secret: MONITOR_URL (e.g. http://ark.mit.edu:1112)
+#      OR update the URL below to match the eventual deployment.
 
 on:
   schedule:
