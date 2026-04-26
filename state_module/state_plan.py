@@ -19,7 +19,6 @@ from pydantic import BaseModel, Field
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from model_module.ArkModelNew import SystemMessage  # noqa: E402
-
 from state_module.base_state import StateOutput  # noqa: E402
 from state_module.state import State  # noqa: E402
 from state_module.state_registry import register_state  # noqa: E402
@@ -58,7 +57,8 @@ class StatePlan(State):
                 "Workshop a concrete plan with the user BEFORE acting.\n"
                 "Return JSON matching the provided schema.\n"
                 "Plan steps must be numbered actions, each one sentence.\n"
-                "If you truly lack information, set needs_clarification=true and include a single clarifying question.\n"
+                "If you truly lack information, set needs_clarification=true and include a single "
+                "clarifying question.\n"
                 "Otherwise provide at least 2 plan_steps."
             )
         )
@@ -141,7 +141,7 @@ class StatePlan(State):
                 "Prompt ",
             ):
                 if question_src.lower().startswith(prefix.lower()):
-                    question_src = question_src[len(prefix):]
+                    question_src = question_src[len(prefix) :]
                     break
             question = question_src.strip().rstrip(".")
             if question and not question.endswith("?"):

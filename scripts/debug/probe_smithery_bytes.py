@@ -1,6 +1,12 @@
-import asyncio, aiohttp, os, sys
+import asyncio
+import os
+import sys
+
+import aiohttp
+
 sys.path.append("/home/nmorgan/dev/arkos")
 from dotenv import load_dotenv
+
 load_dotenv("/home/nmorgan/dev/arkos/.env")
 
 API_KEY = os.environ.get("SMITHERY_API_KEY", "")
@@ -34,7 +40,7 @@ async def test():
                         break
                     sys.stdout.buffer.write(b)
                     sys.stdout.flush()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 print("\nTIMEOUT", flush=True)
 
 asyncio.run(test())

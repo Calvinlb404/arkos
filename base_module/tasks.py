@@ -25,7 +25,7 @@ import json
 import uuid
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 
 import psycopg2
 import psycopg2.extras
@@ -41,7 +41,6 @@ from base_module.task_store import (
     set_task_status,
 )
 from config_module.loader import config
-
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -169,11 +168,7 @@ async def create_task(body: TaskCreate, current: dict = CurrentUser) -> TaskResp
     plan_steps = list(body.plan_steps or [])
     if not plan_steps and body.plan:
         # parse "1. foo\n2. bar" blob
-        plan_steps = [
-            line.split(". ", 1)[-1].strip()
-            for line in body.plan.splitlines()
-            if line.strip()
-        ]
+        plan_steps = [line.split(". ", 1)[-1].strip() for line in body.plan.splitlines() if line.strip()]
 
     if not plan_steps:
         raise HTTPException(400, "plan_steps required (or a multiline plan)")
@@ -217,14 +212,14 @@ async def create_task(body: TaskCreate, current: dict = CurrentUser) -> TaskResp
 
         log_event(resp.task_id, "error", f"spawn failed: {e}")
         mark_task_failed(resp.task_id, str(e))
-        raise HTTPException(500, f"task row created but runner failed to start: {e}")
+        raise HTTPException(500, f"task row created but runner failed to start: {e}") from e
 
     return resp
 
 
 @router.get("", response_model=TaskListResponse)
 async def list_tasks(
-    status: TaskStatus | None = Query(default=None),
+    status: Annotated[TaskStatus | None, Query()] = None,
     current: dict = CurrentUser,
 ) -> TaskListResponse:
     user_uuid = _user_uuid(current["user_id"])
@@ -335,9 +330,7 @@ def _set_status(task_id: str, user_uuid: uuid.UUID, new_status: TaskStatus) -> d
 
 
 @router.patch("/{task_id}/status", response_model=TaskResponse)
-async def update_task_status(
-    task_id: str, body: StatusUpdateRequest, current: dict = CurrentUser
-) -> TaskResponse:
+async def update_task_status(task_id: str, body: StatusUpdateRequest, current: dict = CurrentUser) -> TaskResponse:
     row = _set_status(task_id, _user_uuid(current["user_id"]), body.status)
     return _row_to_response(row)
 

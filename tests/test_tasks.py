@@ -1,162 +1,194 @@
-"""Tests for task queue API endpoints (base_module/tasks.py)."""
+"""Tests for base_module/tasks.py — pure helpers and Pydantic schemas.
+
+The HTTP endpoints all hit a live Postgres (via _connect()) and require
+JWT auth, so they're covered by integration tests on a real deployment
+rather than unit-tested here.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from base_module.tasks import _tasks_store, router
-
-
-@pytest.fixture
-def client():
-    """Create test client with tasks router."""
-    app = FastAPI()
-    app.include_router(router)
-    return TestClient(app)
-
-
-@pytest.fixture(autouse=True)
-def clear_tasks():
-    """Clear in-memory task store before each test."""
-    _tasks_store.clear()
-    yield
-    _tasks_store.clear()
+from base_module.tasks import (
+    ApprovalCard,
+    ApprovalListResponse,
+    ApprovalResponseBody,
+    StatusUpdateRequest,
+    TaskCreate,
+    TaskEvent,
+    TaskEventsResponse,
+    TaskListResponse,
+    TaskResponse,
+    TaskStatus,
+    _row_to_response,
+    _user_uuid,
+)
 
 
-class TestCreateTask:
-    def test_post_returns_200_with_task_id(self, client):
-        """POST /tasks returns 200 with task_id"""
-        payload = {
-            "user_id": "test-user",
-            "required_tools": ["tool1", "tool2"],
-            "context_payload": {"key": "value"}
+class TestTaskStatus:
+    def test_includes_all_lifecycle_states(self):
+        assert TaskStatus.PENDING == "pending"
+        assert TaskStatus.RUNNING == "running"
+        assert TaskStatus.AWAITING_APPROVAL == "awaiting_approval"
+        assert TaskStatus.COMPLETED == "completed"
+        assert TaskStatus.FAILED == "failed"
+        assert TaskStatus.CANCELLED == "cancelled"
+
+    def test_is_str_enum_for_json_serialization(self):
+        # StrEnum subclasses str, which lets Pydantic + json.dumps emit the
+        # raw string value without an explicit serializer.
+        assert isinstance(TaskStatus.RUNNING, str)
+        assert TaskStatus.RUNNING == "running"
+
+
+class TestUserUuid:
+    def test_passes_through_real_uuid(self):
+        u = uuid.uuid4()
+        assert _user_uuid(str(u)) == u
+
+    def test_hashes_legacy_string(self):
+        # Non-UUID inputs (legacy header-based ids) should map deterministically
+        # to the same UUID5 every time so DB rows for the same legacy user line up.
+        a = _user_uuid("kshitij")
+        b = _user_uuid("kshitij")
+        assert a == b
+        assert isinstance(a, uuid.UUID)
+
+    def test_legacy_strings_map_to_distinct_uuids(self):
+        assert _user_uuid("alice") != _user_uuid("bob")
+
+    def test_handles_non_string_input(self):
+        # The signature is typed as str but the try/except also covers None
+        # via TypeError. Make sure that path produces a deterministic uuid.
+        result = _user_uuid(None)  # type: ignore[arg-type]
+        assert isinstance(result, uuid.UUID)
+
+
+class TestRowToResponse:
+    def _row(self, **overrides):
+        base = {
+            "task_id": uuid.uuid4(),
+            "user_id": uuid.uuid4(),
+            "status": "running",
+            "required_tools": ["search", "calendar"],
+            "context_payload": {"title": "do the thing", "plan_steps": ["a", "b"]},
+            "session_id": uuid.uuid4(),
+            "agent_kind": "executor",
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
         }
-        response = client.post("/tasks", json=payload)
+        base.update(overrides)
+        return base
 
-        assert response.status_code == 200
-        data = response.json()
-        assert "task_id" in data
-        assert data["user_id"] == "test-user"
-        assert data["status"] == "pending"
-        assert data["required_tools"] == ["tool1", "tool2"]
-        assert data["context_payload"] == {"key": "value"}
+    def test_full_row_round_trips_to_response(self):
+        row = self._row()
+        resp = _row_to_response(row)
+        assert isinstance(resp, TaskResponse)
+        assert resp.title == "do the thing"
+        assert resp.plan_steps == ["a", "b"]
+        assert resp.required_tools == ["search", "calendar"]
+        assert resp.status == TaskStatus.RUNNING
+        assert resp.agent_kind == "executor"
 
-    def test_post_minimal_payload(self, client):
-        """POST /tasks with minimal payload"""
-        payload = {"user_id": "user123"}
-        response = client.post("/tasks", json=payload)
+    def test_handles_string_encoded_payload(self):
+        # Postgres can return jsonb columns as already-decoded dicts OR as
+        # strings depending on the driver/cursor configuration. Both must work.
+        row = self._row(context_payload='{"title": "json string", "plan_steps": ["x"]}')
+        resp = _row_to_response(row)
+        assert resp.title == "json string"
+        assert resp.plan_steps == ["x"]
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["required_tools"] == []
-        assert data["context_payload"] == {}
+    def test_handles_missing_session_id(self):
+        row = self._row(session_id=None)
+        resp = _row_to_response(row)
+        assert resp.session_id is None
 
+    def test_handles_empty_context_payload(self):
+        row = self._row(context_payload=None)
+        resp = _row_to_response(row)
+        assert resp.title == ""
+        assert resp.plan_steps == []
+        assert resp.context_payload == {}
 
-class TestListTasks:
-    def test_get_returns_list(self, client):
-        """GET /tasks?user_id= returns list"""
-        # Create a task first
-        client.post("/tasks", json={"user_id": "user-a"})
-        client.post("/tasks", json={"user_id": "user-a"})
-        client.post("/tasks", json={"user_id": "user-b"})
-
-        # List tasks for user-a
-        response = client.get("/tasks?user_id=user-a")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert "tasks" in data
-        assert "total" in data
-        assert data["total"] == 2
-        assert len(data["tasks"]) == 2
-        assert all(t["user_id"] == "user-a" for t in data["tasks"])
-
-    def test_get_empty_list(self, client):
-        """GET /tasks returns empty list for user with no tasks"""
-        response = client.get("/tasks?user_id=nonexistent")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 0
-        assert data["tasks"] == []
-
-    def test_get_requires_user_id(self, client):
-        """GET /tasks without user_id param returns 422"""
-        response = client.get("/tasks")
-        assert response.status_code == 422
+    def test_handles_missing_required_tools(self):
+        row = self._row(required_tools=None)
+        resp = _row_to_response(row)
+        assert resp.required_tools == []
 
 
-class TestUpdateTaskStatus:
-    def test_patch_updates_status(self, client):
-        """PATCH /tasks/{id}/status updates status"""
-        # Create a task
-        create_resp = client.post("/tasks", json={"user_id": "user1"})
-        task_id = create_resp.json()["task_id"]
+class TestTaskCreateSchema:
+    def test_minimal_payload(self):
+        tc = TaskCreate(title="t", plan_steps=["one step"])
+        assert tc.title == "t"
+        assert tc.plan_steps == ["one step"]
+        assert tc.required_tools == []
+        assert tc.context_payload == {}
+        assert tc.plan is None
 
-        # Update status
-        payload = {"status": "running"}
-        response = client.patch(f"/tasks/{task_id}/status", json=payload)
+    def test_title_max_length_enforced(self):
+        with pytest.raises(ValueError):
+            TaskCreate(title="x" * 281, plan_steps=["a"])
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "running"
-        assert data["task_id"] == task_id
-
-    def test_patch_multiple_status_transitions(self, client):
-        """PATCH can update status multiple times"""
-        create_resp = client.post("/tasks", json={"user_id": "user1"})
-        task_id = create_resp.json()["task_id"]
-
-        # pending -> running
-        client.patch(f"/tasks/{task_id}/status", json={"status": "running"})
-
-        # running -> completed
-        response = client.patch(f"/tasks/{task_id}/status", json={"status": "completed"})
-        assert response.json()["status"] == "completed"
-
-    def test_patch_nonexistent_task_returns_404(self, client):
-        """PATCH nonexistent task returns 404"""
-        payload = {"status": "completed"}
-        response = client.patch("/tasks/nonexistent-id/status", json=payload)
-
-        assert response.status_code == 404
-        assert "not found" in response.json()["detail"]
-
-    def test_patch_accepts_all_statuses(self, client):
-        """PATCH accepts all valid TaskStatus values"""
-        create_resp = client.post("/tasks", json={"user_id": "user1"})
-        task_id = create_resp.json()["task_id"]
-
-        for status in ["pending", "running", "completed", "failed", "cancelled"]:
-            response = client.patch(
-                f"/tasks/{task_id}/status",
-                json={"status": status}
-            )
-            assert response.status_code == 200
-            assert response.json()["status"] == status
-
-
-class TestTaskTimestamps:
-    def test_created_at_set_on_creation(self, client):
-        """Task has created_at when created"""
-        response = client.post("/tasks", json={"user_id": "user1"})
-        task = response.json()
-        assert "created_at" in task
-        assert task["created_at"] is not None
-
-    def test_updated_at_changes_on_status_update(self, client):
-        """Task updated_at changes when updated"""
-        create_resp = client.post("/tasks", json={"user_id": "user1"})
-        task_id = create_resp.json()["task_id"]
-        created_at = create_resp.json()["created_at"]
-
-        # Update status
-        import time
-        time.sleep(0.1)  # Ensure time difference
-        update_resp = client.patch(
-            f"/tasks/{task_id}/status",
-            json={"status": "running"}
+    def test_full_payload(self):
+        tc = TaskCreate(
+            title="ship it",
+            plan_steps=["pull main", "rebase", "push"],
+            plan="1. pull main\n2. rebase\n3. push",
+            required_tools=["git"],
+            context_payload={"branch": "main"},
         )
-        updated_at = update_resp.json()["updated_at"]
+        assert tc.required_tools == ["git"]
+        assert tc.context_payload == {"branch": "main"}
 
-        assert updated_at != created_at
+
+class TestStatusUpdateRequest:
+    def test_accepts_valid_status(self):
+        s = StatusUpdateRequest(status=TaskStatus.COMPLETED)
+        assert s.status == TaskStatus.COMPLETED
+
+    def test_rejects_invalid_status(self):
+        with pytest.raises(ValueError):
+            StatusUpdateRequest(status="not-a-real-status")  # type: ignore[arg-type]
+
+
+class TestApprovalSchemas:
+    def test_approval_response_defaults(self):
+        ar = ApprovalResponseBody()
+        assert ar.approved is None
+        assert ar.answer is None
+
+    def test_approval_card_round_trips(self):
+        card = ApprovalCard(
+            approval_id="a1",
+            task_id="t1",
+            task_title="my task",
+            kind="binary",
+            prompt="approve?",
+            context={"step": 2},
+            created_at=datetime.now(UTC),
+        )
+        listed = ApprovalListResponse(approvals=[card], total=1)
+        assert listed.total == 1
+        assert listed.approvals[0].kind == "binary"
+
+
+class TestEventSchemas:
+    def test_task_event_minimal(self):
+        ev = TaskEvent(event_id=1, kind="step_started", content="step 1", payload={}, created_at=datetime.now(UTC))
+        assert ev.event_id == 1
+        assert ev.kind == "step_started"
+
+    def test_events_response_pagination_cursor(self):
+        ev = TaskEvent(event_id=5, kind="info", content="x", payload={}, created_at=datetime.now(UTC))
+        resp = TaskEventsResponse(events=[ev], next_after=5)
+        assert resp.next_after == 5
+
+
+class TestTaskListResponse:
+    def test_empty_list(self):
+        resp = TaskListResponse(tasks=[], total=0)
+        assert resp.total == 0
+        assert resp.tasks == []

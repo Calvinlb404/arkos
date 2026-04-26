@@ -7,7 +7,6 @@ states can import it without pulling the FastAPI router.
 from __future__ import annotations
 
 import json
-import uuid
 from typing import Any
 
 import psycopg2

@@ -186,15 +186,19 @@ class TestMemoryWithMockedDB:
         assert isinstance(restored, UserMessage)
         assert restored.content == "hello"
 
-    def test_add_memory_inserts_to_db(self, memory_instance):
+    @pytest.mark.asyncio
+    async def test_add_memory_inserts_to_db(self, memory_instance):
         mem, mock_conn, mock_cursor = memory_instance
         msg = UserMessage(content="test message")
-        result = mem.add_memory(msg)
+        result = await mem.add_memory(msg)
         assert result is True
+        # _insert() runs in a thread via asyncio.to_thread; by the time await
+        # returns, the cursor + commit calls have happened.
         mock_cursor.execute.assert_called_once()
         mock_conn.commit.assert_called_once()
 
-    def test_retrieve_short_memory(self, memory_instance):
+    @pytest.mark.asyncio
+    async def test_retrieve_short_memory(self, memory_instance):
         mem, mock_conn, mock_cursor = memory_instance
         # Simulate DB returning rows
         user_msg = UserMessage(content="hi")
@@ -204,14 +208,15 @@ class TestMemoryWithMockedDB:
             ("assistant", ai_msg.model_dump_json()),
         ]
 
-        result = mem.retrieve_short_memory(turns=5)
+        result = await mem.retrieve_short_memory(turns=5)
         assert len(result) == 2
         assert isinstance(result[0], UserMessage)
         assert isinstance(result[1], AIMessage)
 
-    def test_retrieve_long_memory_disabled(self, memory_instance):
+    @pytest.mark.asyncio
+    async def test_retrieve_long_memory_disabled(self, memory_instance):
         mem, _, _ = memory_instance
         # use_long_term is False
-        result = mem.retrieve_long_memory()
+        result = await mem.retrieve_long_memory()
         assert isinstance(result, SystemMessage)
         assert result.content == ""
