@@ -6,7 +6,7 @@ ARK (Automated Resource Knowledgebase) revolutionizes resource management via au
 
 ```
 ┌──────────────┐
-│  arkos app   │  FastAPI server (port 1112)
+│  arkos app   │  FastAPI server (port configurable)
 │  /v1/chat/   │  OpenAI-compatible chat completions API
 └──┬───┬───┬───┘
    │   │   │
@@ -14,60 +14,37 @@ ARK (Automated Resource Knowledgebase) revolutionizes resource management via au
 ┌──────┐ ┌──────────┐ ┌──────────────────┐
 │Postgres│ │  SGLang  │ │ Text Embeddings │
 │memory  │ │  (LLM)   │ │ Inference (TEI)  │
-│:5432   │ │  :30000  │ │ :8081            │
+│:5432   │ │  :30000  │ │ :4444            │
 └────────┘ └──────────┘ └──────────────────┘
 ```
 
 - **App** -- FastAPI agent that orchestrates state transitions, LLM calls, and tool usage
 - **SGLang** -- serves Qwen 2.5-7B-Instruct for inference (requires GPU)
-- **TEI** -- Hugging Face text embeddings for memory search (requires GPU)
+- **TEI** -- Hugging Face text embeddings for memory search, runs on port 4444 (requires GPU)
 - **Postgres** -- stores conversation history and OAuth tokens (via Supabase)
 
 ## Languages and Dependencies
 
 The entire codebase is in Python, except for a few shell scripts. Docker is needed for quick setup.
 
-### Core Dependencies
-
-* **`openai>=1.61.0`** -- OpenAI Python SDK for standardizing inference engine communication and API compatibility
-* **`pyyaml>=6.0.2`** -- YAML parser for configuration files (state graphs, etc.)
-* **`pydantic>=2.10.6`** -- Data validation and schema definition using Python type annotations
-* **`requests>=2.32.3`** -- HTTP library for making API requests to external services and tools
-
-### Web Framework
-
-* **`fastapi>=0.115.0`** -- Modern, fast web framework for building the API server with automatic OpenAPI documentation
-* **`uvicorn>=0.32.0`** -- ASGI server for running FastAPI applications
-
-### Database and Memory
-
-* **`psycopg2-binary>=2.9.11`** -- PostgreSQL adapter for Python (binary distribution, no compilation required). Used for storing conversation context and long-term memory
-* **`mem0ai`** -- Memory management library for vector-based memory storage and retrieval using Supabase
-
-### Installation
-
-Install all dependencies using:
+All dependencies are listed in [`requirements.txt`](requirements.txt). Development tools (linting, testing) are in [`requirements-dev.txt`](requirements-dev.txt).
 
 ```bash
 pip install -r requirements.txt
-```
-
-For development (includes linting and test tools):
-
-```bash
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.txt  # dev only
 ```
 
 ## File Structure
 
-* `base_module/` -- FastAPI app, auth routes, CLI interfaces
+* `base_module/` -- FastAPI app, user auth (JWT/OAuth), tasks API
 * `config_module/` -- YAML configuration loader
-* `db/` -- Postgress task table intializer
+* `db/` -- Postgres schema migrations and maintenance scripts
 * `model_module/` -- LLM inference wrapper (ArkModelLink)
 * `agent_module/` -- agent orchestration and state machine runner
 * `state_module/` -- state graph definitions (agent, tool, user states)
-* `tool_module/` -- MCP (Model Context Protocol) tool integration
+* `tool_module/` -- MCP (Model Context Protocol) tool integration via Smithery
 * `memory_module/` -- short-term (Postgres) and long-term (mem0) memory
+* `frontend/` -- web UI served at `/app`
 * `tests/` -- pytest test suite
 
 ## CI/CD Pipeline
@@ -84,7 +61,7 @@ CI/CD is configured via GitHub Actions. All workflows live in `.github/workflows
 
 On PRs, the build job builds without pushing (verification only). On pushes to `main`, the image is tagged with both the commit SHA and `latest` and pushed to GitHub Container Registry.
 
-### Deploy (`deploy.yml`) -- runs on push to `main`
+### Deploy (`deploy.yml`) -- runs on push to `main` *(currently disabled)*
 
 Deploys the app as a Docker container on `ark.mit.edu`:
 1. SSHes in as the `kshitij` user (has docker group access, no sudo needed)
@@ -96,7 +73,7 @@ Deploys the app as a Docker container on `ark.mit.edu`:
 7. Rolls back to the previous image automatically if any step fails
 
 **Setup required on `ark.mit.edu` (one-time):**
-1. Create `/home/kshitij/arkos/.env` with `DB_URL`, `OPENAI_API_KEY`, `BRAVE_API_KEY`, `GOOGLE_OAUTH_CREDENTIALS`, `HF_TOKEN`, etc.
+1. Create `/home/kshitij/arkos/.env` with `DB_URL`, `SMITHERY_API_KEY`, `SMITHERY_NAMESPACE`, `HF_TOKEN`, etc.
 2. Either make the `ghcr.io/sgiark/arkos` package public (GitHub > repo > Packages > package settings), or run once as kshitij:
    ```bash
    echo $GITHUB_TOKEN | docker login ghcr.io -u <your-gh-username> --password-stdin
@@ -106,7 +83,7 @@ Deploys the app as a Docker container on `ark.mit.edu`:
 1. Add `SSH_PRIVATE_KEY` as a repo secret (Settings > Secrets and variables > Actions). This is the private key for the `kshitij` user on ark.mit.edu.
 2. Ensure the corresponding public key is in `~/.ssh/authorized_keys` on the server.
 
-### Monitor (`monitor.yml`) -- runs every 30 minutes
+### Monitor (`monitor.yml`) -- runs every 30 minutes *(currently disabled)*
 
 Pings the `/health` endpoint and reports per-service status (SGLang, TEI, Postgres). GitHub sends an email notification if the check fails.
 
@@ -194,17 +171,13 @@ You need to create a `.env` and set `DB_URL` before starting the application:
 
 ### Running the Application
 
-1. **Start the API server** (in one terminal):
+1. **Start the API server**:
    ```bash
    python base_module/app.py
    ```
-   This starts the FastAPI server on the configured port, providing the `/v1/chat/completions` endpoint.
+   This starts the FastAPI server on the port configured in `config_module/config.yaml` (`app.port`).
 
-2. **Run the test interface** (in another terminal):
-   ```bash
-   python base_module/main_interface.py
-   ```
-   This provides an interactive CLI to test the agent. Type your messages and press Enter. Type `exit` or `quit` to stop.
+2. **Access the UI**: Port-forward to `app.port` (default `1114`) and navigate to `/app` in your browser.
 
 ### Docker Compose (Full Stack)
 
