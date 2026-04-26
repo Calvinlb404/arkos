@@ -8,17 +8,15 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime
 from typing import Any
 
 import psycopg2
 import psycopg2.extras
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from base_module.jwt_utils import CurrentUser, issue_token
 from config_module.loader import config
-
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -82,7 +80,7 @@ async def demo_login(req: DemoLoginRequest) -> LoginResponse:
     try:
         user_id, uname = _find_or_create_user(username)
     except psycopg2.Error as e:
-        raise HTTPException(500, f"db error: {e}")
+        raise HTTPException(500, f"db error: {e}") from e
 
     token = issue_token(user_id, uname)
     return LoginResponse(token=token, user_id=user_id, username=uname)

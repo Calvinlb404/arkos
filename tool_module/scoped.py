@@ -48,9 +48,7 @@ class ScopedToolManager:
     # ---- execution ---------------------------------------------------------
     async def call_tool(self, *, tool_name: str, arguments: dict, user_id: str | None = None):
         if self._allowed and tool_name not in self._allowed:
-            raise PermissionError(
-                f"tool {tool_name!r} is not in this subagent's allowed set: {sorted(self._allowed)}"
-            )
+            raise PermissionError(f"tool {tool_name!r} is not in this subagent's allowed set: {sorted(self._allowed)}")
         return await self._inner.call_tool(
             tool_name=tool_name,
             arguments=arguments,

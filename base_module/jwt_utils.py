@@ -21,9 +21,7 @@ import uuid
 from typing import Any
 
 import jwt  # PyJWT
-
 from fastapi import Depends, Header, HTTPException, status
-
 
 _SECRET = os.environ.get("ARK_JWT_SECRET", "ark-dev-secret-change-me")
 _ALG = "HS256"
@@ -71,7 +69,7 @@ async def get_current_user(
         try:
             payload = decode_token(token)
         except jwt.PyJWTError as e:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"invalid token: {e}")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"invalid token: {e}") from e
         return {"user_id": payload["sub"], "username": payload.get("username") or "anon"}
 
     if x_user_id:

@@ -9,29 +9,27 @@ to ask_human instead of silently deviating.
 
 from __future__ import annotations
 
-import json
 import os
 import sys
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from model_module.ArkModelNew import SystemMessage  # noqa: E402
-
 from base_module.task_store import log_event  # noqa: E402
+from model_module.ArkModelNew import SystemMessage  # noqa: E402
 from state_module.base_state import StateOutput  # noqa: E402
 from state_module.state import State  # noqa: E402
 from state_module.state_registry import register_state  # noqa: E402
 
 
-class _ActionKind(str, Enum):
+class _ActionKind(StrEnum):
     tool = "tool"
     ask = "ask"
 
 
-class _AskKind(str, Enum):
+class _AskKind(StrEnum):
     binary = "binary"
     text = "text"
 
@@ -39,7 +37,10 @@ class _AskKind(str, Enum):
 class ExecutorDecision(BaseModel):
     """Structured choice for the current plan step."""
 
-    action: _ActionKind = Field(..., description="tool if the step can be performed by calling a tool, ask if human input is required")
+    action: _ActionKind = Field(
+        ...,
+        description="tool if the step can be performed by calling a tool, ask if human input is required",
+    )
     reason: str = Field(..., description="One-sentence justification")
 
     # populated when action == tool
@@ -151,12 +152,16 @@ class StateExecutor(State):
                 agent.pending_ask = {
                     "kind": "text",
                     "prompt": (
-                        f"I need to do: {current_step}\n"
-                        f"But I don't have a tool that matches. How should I handle this?"
+                        f"I need to do: {current_step}\nBut I don't have a tool that matches. How should I handle this?"
                     ),
                 }
                 if task_id:
-                    log_event(task_id, "fallback_ask", "invalid tool name from LLM", payload={"llm_choice": decision.tool_name})
+                    log_event(
+                        task_id,
+                        "fallback_ask",
+                        "invalid tool name from LLM",
+                        payload={"llm_choice": decision.tool_name},
+                    )
                 return StateOutput(
                     content="",
                     completion_signal="incomplete",

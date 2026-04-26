@@ -50,7 +50,8 @@ class AuthRequiredError(Exception):
         self.setup_url = setup_url
         self.state = state
         self.message = message or (
-            f"Please connect {service} to continue" if state == "auth_required"
+            f"Please connect {service} to continue"
+            if state == "auth_required"
             else f"{service} needs additional configuration"
         )
         # Back-compat with state_tool.py which reads .service_info and .connect_url
@@ -159,16 +160,17 @@ class SmitheryClient:
         }
         headers = self._headers()
         headers["Accept"] = "application/json, text/event-stream"
-        
+
         logger.debug("smithery POST %s method=%s", url, method)
         async with session.post(url, json=rpc_body, headers=headers) as resp:
             text = await resp.text()
             if resp.status >= 400:
                 raise SmitheryError(f"jsonrpc {method} {resp.status}: {text}")
-            
+
             data = {}
             if text:
                 import json
+
                 try:
                     data = await resp.json(content_type=None)
                 except Exception:
@@ -184,9 +186,7 @@ class SmitheryClient:
                                 pass
             if "error" in data:
                 err = data["error"] or {}
-                raise SmitheryError(
-                    f"{method} rpc error {err.get('code')}: {err.get('message')}"
-                )
+                raise SmitheryError(f"{method} rpc error {err.get('code')}: {err.get('message')}")
             return data.get("result", {})
 
 
@@ -305,7 +305,9 @@ class SmitheryManager:
                     if state != "connected":
                         logger.warning(
                             "smithery: shared server '%s' came back state=%s, setup=%s",
-                            server_name, state, setup_url,
+                            server_name,
+                            state,
+                            setup_url,
                         )
                         continue
 
@@ -317,15 +319,14 @@ class SmitheryManager:
                             self._tool_registry[tname] = server_name
                     logger.info(
                         "smithery: shared '%s' connected with %d tools",
-                        server_name, len(tools),
+                        server_name,
+                        len(tools),
                     )
 
                 except Exception as e:
                     logger.error("smithery: failed to init '%s': %s", server_name, e)
 
-    async def _fetch_tools(
-        self, session: aiohttp.ClientSession, connection_id: str
-    ) -> list[dict[str, Any]]:
+    async def _fetch_tools(self, session: aiohttp.ClientSession, connection_id: str) -> list[dict[str, Any]]:
         result = await self.client.jsonrpc(session, connection_id, "tools/list", {})
         tools = result.get("tools", []) if isinstance(result, dict) else []
         return tools
@@ -415,7 +416,7 @@ class SmitheryManager:
             pack(server_name, tools)
 
         # union of per-user tools across all known users
-        for user_id, by_server in self._user_tools.items():
+        for _user_id, by_server in self._user_tools.items():
             for server_name, tools in by_server.items():
                 out.setdefault(server_name, {})
                 pack(server_name, tools)
@@ -442,8 +443,7 @@ class SmitheryManager:
                         service="unknown",
                         user_id="unknown",
                         message=(
-                            f"Tool '{tool_name}' is not registered. "
-                            "User needs to connect a Smithery service first."
+                            f"Tool '{tool_name}' is not registered. User needs to connect a Smithery service first."
                         ),
                     )
                 for candidate, spec in self.servers.items():

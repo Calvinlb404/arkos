@@ -56,7 +56,7 @@ class TestStateUser:
         su = StateUser("u", {})
         assert su.check_transition_ready({}) is True
         assert su.check_transition_ready({"anything": "here"}) is True
-    
+
     @pytest.mark.asyncio
     async def test_run_returns_none(self):
         su = StateUser("u", {})
@@ -74,30 +74,44 @@ class TestReasonedOutput:
         data = ReasonedOutput(
             intent="answer question",
             approach=["think", "respond"],
-            needs_clarification=False,
-            clarifying_question=None,
+            route="reply",
             final="The answer is 42.",
         )
         assert data.intent == "answer question"
         assert len(data.approach) == 2
         assert data.final == "The answer is 42."
+        # _Route is a StrEnum so the enum and the string are equal
+        assert data.route == "reply"
 
-    def test_with_clarification(self):
+    def test_route_ask_for_clarification(self):
         data = ReasonedOutput(
             intent="unclear request",
             approach=["analyze"],
-            needs_clarification=True,
-            clarifying_question="What do you mean?",
-            final="I need more info.",
+            route="ask",
+            final="What do you mean?",
         )
-        assert data.needs_clarification is True
-        assert data.clarifying_question == "What do you mean?"
+        assert data.route == "ask"
+        assert data.final == "What do you mean?"
+
+    def test_route_plan_for_action(self):
+        data = ReasonedOutput(
+            intent="schedule meeting",
+            approach=["call calendar tool"],
+            route="plan",
+            final="On it.",
+        )
+        assert data.route == "plan"
+
+    def test_invalid_route_rejected(self):
+        with pytest.raises(ValueError):
+            ReasonedOutput(intent="x", route="bogus", final="y")
 
     def test_json_schema_generation(self):
         schema = ReasonedOutput.model_json_schema()
         assert "properties" in schema
         assert "intent" in schema["properties"]
         assert "final" in schema["properties"]
+        assert "route" in schema["properties"]
 
 
 # --- StateAI ---
@@ -122,11 +136,11 @@ class TestStateAI:
         reasoned = ReasonedOutput(
             intent="help user",
             approach=["step 1", "step 2"],
-            needs_clarification=False,
-            clarifying_question=None,
+            route="reply",
             final="Here is your answer.",
         )
         mock_agent = MagicMock()
+        mock_agent.system_prompt = ""
         mock_agent.call_llm = AsyncMock(return_value=AIMessage(content=reasoned.model_dump_json()))
 
         result = await sa.run(
@@ -135,28 +149,54 @@ class TestStateAI:
         )
 
         assert isinstance(result, StateOutput)
-        assert "Here is your answer." in result.content
-        assert "step 1" in result.content
+        # The new state_ai surfaces ONLY `final` to the user. Approach steps
+        # stay internal (chain-of-thought hiding).
+        assert result.content == "Here is your answer."
+        assert "step 1" not in result.content
+        assert result.structured_data["next_state"] == "ask_user"
+        assert result.structured_data["route"] == "reply"
 
     @pytest.mark.asyncio
     async def test_run_with_invalid_json_falls_back(self):
         sa = StateAI("reasoning", {})
         mock_agent = MagicMock()
+        mock_agent.system_prompt = ""
         mock_agent.call_llm = AsyncMock(return_value=AIMessage(content="not valid json at all"))
 
         result = await sa.run([], mock_agent)
         assert isinstance(result, StateOutput)
+        # Soft fallback: surface the raw content, hand back to the user.
         assert result.content == "not valid json at all"
+        assert result.structured_data["next_state"] == "ask_user"
 
     @pytest.mark.asyncio
     async def test_run_with_none_content(self):
         sa = StateAI("reasoning", {})
         mock_agent = MagicMock()
+        mock_agent.system_prompt = ""
         mock_agent.call_llm = AsyncMock(return_value=AIMessage(content=None))
 
         result = await sa.run([], mock_agent)
         assert isinstance(result, StateOutput)
-        assert "issue" in result.content.lower() or "try again" in result.content.lower()
+        assert "rephrase" in result.content.lower() or "trouble" in result.content.lower()
+        assert result.completion_signal == "error"
+
+    @pytest.mark.asyncio
+    async def test_run_routes_plan_to_workshop(self):
+        sa = StateAI("reasoning", {})
+        reasoned = ReasonedOutput(
+            intent="schedule something",
+            approach=["use calendar tool"],
+            route="plan",
+            final="Putting together a plan.",
+        )
+        mock_agent = MagicMock()
+        mock_agent.system_prompt = ""
+        mock_agent.call_llm = AsyncMock(return_value=AIMessage(content=reasoned.model_dump_json()))
+
+        result = await sa.run([], mock_agent)
+        assert result.structured_data["next_state"] == "workshop_plan"
+        assert result.completion_signal == "complete"
 
     @pytest.mark.asyncio
     async def test_run_with_clarification(self):
@@ -164,15 +204,17 @@ class TestStateAI:
         reasoned = ReasonedOutput(
             intent="unclear",
             approach=["analyze"],
-            needs_clarification=True,
-            clarifying_question="Could you clarify?",
-            final="I need more info.",
+            route="ask",
+            final="Could you clarify?",
         )
         mock_agent = MagicMock()
+        mock_agent.system_prompt = ""
         mock_agent.call_llm = AsyncMock(return_value=AIMessage(content=reasoned.model_dump_json()))
 
         result = await sa.run([], mock_agent)
         assert "Could you clarify?" in result.content
+        assert result.structured_data["next_state"] == "ask_user"
+        assert result.completion_signal == "needs_input"
 
 
 # --- StateTool ---
@@ -251,6 +293,11 @@ class TestStateTool:
         st = StateTool("t", {})
         mock_agent = MagicMock()
         mock_agent.current_user_id = "user1"
+        # Force the chat path: pending_tool/task_id default to truthy MagicMocks
+        # otherwise, which would route us through the executor branch and try
+        # to log_event into a real Postgres.
+        mock_agent.pending_tool = None
+        mock_agent.task_id = None
 
         with (
             patch.object(st, "choose_tool", new_callable=AsyncMock) as mock_choose,

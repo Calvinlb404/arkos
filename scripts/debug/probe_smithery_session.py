@@ -1,10 +1,14 @@
 """Quick test: upsert with JSON-only Accept, jsonrpc with SSE Accept."""
 import asyncio
+import json
+import os
+import sys
+
 import aiohttp
-import os, sys, json
 
 sys.path.append("/home/nmorgan/dev/arkos")
 from dotenv import load_dotenv
+
 load_dotenv("/home/nmorgan/dev/arkos/.env")
 
 API_KEY = os.environ.get("SMITHERY_API_KEY", "")
@@ -82,7 +86,7 @@ async def main():
                                     pass
                 except StopAsyncIteration:
                     print("  Done!")
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     print(f"  [TIMEOUT] buffered {len(buf)}b")
                     print(f"  raw: {buf[:500]}")
             else:
