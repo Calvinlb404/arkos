@@ -63,8 +63,10 @@ def _install_fake_browser_use(monkeypatch, run_side_effect=None, captured_cdp=No
             return FakeHistory(value)
 
     class FakeChatOpenAI:
-        def __init__(self, model):
+        def __init__(self, model, base_url=None, api_key=None):
             self.model = model
+            self.base_url = base_url
+            self.api_key = api_key
 
     fake_browser_use.Agent = FakeAgent
     fake_browser_use.Browser = FakeBrowser
@@ -97,6 +99,62 @@ async def test_browser_tool_returns_result(monkeypatch):
 # ---------------------------------------------------------------------------
 # Test 2: user isolation (concurrent calls, separate sessions)
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_browser_tool_routes_llm_through_sglang(monkeypatch):
+    """The browser-use Agent's LLM should be pointed at the in-cluster SGLang
+    Qwen server rather than the public OpenAI API."""
+    import tool_module.browser_tool as bt
+
+    captured_llm = {}
+
+    fake_browser_use = types.ModuleType("browser_use")
+    fake_langchain = types.ModuleType("langchain_openai")
+
+    class FakeBrowserConfig:
+        def __init__(self, cdp_url=None):
+            self.cdp_url = cdp_url
+
+    class FakeBrowser:
+        def __init__(self, config):
+            self.config = config
+
+        async def close(self):
+            pass
+
+    class FakeHistory:
+        def final_result(self):
+            return "ok"
+
+    class FakeAgent:
+        def __init__(self, task, llm, browser):
+            self.llm = llm
+
+        async def run(self):
+            return FakeHistory()
+
+    class FakeChatOpenAI:
+        def __init__(self, model, base_url=None, api_key=None):
+            captured_llm["model"] = model
+            captured_llm["base_url"] = base_url
+            captured_llm["api_key"] = api_key
+
+    fake_browser_use.Agent = FakeAgent
+    fake_browser_use.Browser = FakeBrowser
+    fake_browser_use.BrowserConfig = FakeBrowserConfig
+    fake_langchain.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "browser_use", fake_browser_use)
+    monkeypatch.setitem(sys.modules, "langchain_openai", fake_langchain)
+
+    monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
+    monkeypatch.setenv("SGLANG_URL", "http://sglang:30000")
+    monkeypatch.delenv("BROWSER_USE_MODEL", raising=False)
+
+    await bt.run_browser_task("user_1", "anything")
+
+    assert captured_llm["base_url"] == "http://sglang:30000/v1"
+    assert captured_llm["model"] == "tgi"
 
 
 @pytest.mark.asyncio

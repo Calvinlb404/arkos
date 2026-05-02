@@ -7,8 +7,15 @@ from the pool, torn down on completion or timeout. This module only owns the
 glue between Arkos's tool registry and the `browser-use` Agent.
 
 Configuration (env):
-  BROWSERLESS_URL   CDP WebSocket URL, e.g. ws://browserless:3000 (required)
-  OPENAI_API_KEY    used by the underlying browser-use Agent's LLM
+  BROWSERLESS_URL    CDP WebSocket URL, e.g. ws://browserless:3000 (required)
+  SGLANG_URL         base URL of the in-cluster SGLang Qwen server
+                     (default http://sglang:30000); the tool talks to its
+                     OpenAI-compatible /v1 endpoint
+  BROWSER_USE_MODEL  model name to send to SGLang (default "tgi", which the
+                     SGLang launcher accepts as an alias for whatever model
+                     is loaded)
+  OPENAI_API_KEY     forwarded as the bearer token; SGLang ignores it but the
+                     OpenAI client requires something. Defaults to "sk-dummy".
 """
 
 from __future__ import annotations
@@ -41,11 +48,22 @@ async def run_browser_task(user_id: str, task: str) -> str:
     except ImportError as e:
         raise BrowserToolError(f"browser-use is not installed in this environment: {e}") from e
 
-    logger.info("browser_tool: user=%s connecting to %s", user_id, cdp_url)
+    sglang_base = os.environ.get("SGLANG_URL", "http://sglang:30000").rstrip("/")
+    llm_base_url = f"{sglang_base}/v1"
+    llm_model = os.environ.get("BROWSER_USE_MODEL", "tgi")
+    llm_api_key = os.environ.get("OPENAI_API_KEY", "sk-dummy")
+
+    logger.info(
+        "browser_tool: user=%s cdp=%s llm=%s model=%s",
+        user_id,
+        cdp_url,
+        llm_base_url,
+        llm_model,
+    )
     browser = Browser(config=BrowserConfig(cdp_url=cdp_url))
     agent = Agent(
         task=task,
-        llm=ChatOpenAI(model=os.environ.get("BROWSER_USE_MODEL", "gpt-4o-mini")),
+        llm=ChatOpenAI(model=llm_model, base_url=llm_base_url, api_key=llm_api_key),
         browser=browser,
     )
 
