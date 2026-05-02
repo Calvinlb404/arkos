@@ -20,6 +20,7 @@ from config_module.loader import config
 from memory_module.memory import Memory
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage
 from state_module.state_handler import StateHandler
+from tool_module.browser_tool import register_browser_tool
 from tool_module.smithery import AuthRequiredError
 from tool_module.tool_call import MCPToolManager
 
@@ -188,6 +189,7 @@ async def startup():
 
     if tool_manager:
         await tool_manager.initialize_servers()
+        register_browser_tool(tool_manager)
 
         _available_tools = await tool_manager.list_all_tools()
 

@@ -21,9 +21,12 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import aiohttp
+
+LocalToolHandler = Callable[[dict[str, Any], str | None], Awaitable[Any]]
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +268,27 @@ class SmitheryManager:
         # {user_id: {server_name: setup_url}} for connections waiting on OAuth
         self._pending: dict[str, dict[str, str]] = {}
 
+        # Local (non-Smithery) tools registered in-process. Useful for things
+        # like the browser automation tool that talks to Browserless directly
+        # over CDP. Shape: {tool_name: {"spec": dict, "handler": coroutine}}.
+        self._local_tools: dict[str, dict[str, Any]] = {}
+
+    def register_local_tool(
+        self,
+        name: str,
+        description: str,
+        input_schema: dict[str, Any],
+        handler: LocalToolHandler,
+    ) -> None:
+        """Register an in-process tool that bypasses Smithery.
+
+        The handler is awaited as `handler(arguments, user_id)`. The tool shows
+        up under the synthetic server name "local" in `list_all_tools()`.
+        """
+        spec = {"name": name, "description": description, "inputSchema": input_schema}
+        self._local_tools[name] = {"spec": spec, "handler": handler}
+        self._tool_registry[name] = "local"
+
     # ---------- config helpers ----------
 
     def _shared_conn_id(self, server_name: str) -> str:
@@ -415,6 +439,9 @@ class SmitheryManager:
         for server_name, tools in self._shared_tools.items():
             pack(server_name, tools)
 
+        if self._local_tools:
+            pack("local", [entry["spec"] for entry in self._local_tools.values()])
+
         # union of per-user tools across all known users
         for _user_id, by_server in self._user_tools.items():
             for server_name, tools in by_server.items():
@@ -431,6 +458,11 @@ class SmitheryManager:
         arguments: dict[str, Any],
         user_id: str | None = None,
     ) -> Any:
+        # Locally-registered tools (e.g. browser automation) skip Smithery entirely.
+        local = self._local_tools.get(tool_name)
+        if local is not None:
+            return await local["handler"](arguments, user_id)
+
         server_name = self._tool_registry.get(tool_name)
 
         async with aiohttp.ClientSession() as session:
