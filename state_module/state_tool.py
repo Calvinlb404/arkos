@@ -120,7 +120,7 @@ class StateTool(State):
                 log_event(
                     task_id,
                     "tool_result",
-                    str(tool_result)[:2000],
+                    str(tool_result),
                     payload={"tool_name": tool_arg_dict["tool_name"]},
                 )
 
@@ -128,7 +128,7 @@ class StateTool(State):
                 # Inside the executor graph: advance past this plan step
                 agent.step_idx = getattr(agent, "step_idx", 0) + 1
                 return StateOutput(
-                    content=f"tool `{tool_arg_dict['tool_name']}` -> {str(tool_result)[:400]}",
+                    content=f"tool `{tool_arg_dict['tool_name']}` -> {tool_result}",
                     completion_signal="complete",
                     structured_data={"tool_result": tool_result, "next_state": forced_next},
                 )
