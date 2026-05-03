@@ -310,6 +310,25 @@ class TestStateTool:
             assert isinstance(result, StateOutput)
             assert "42" in result.content
 
+    @pytest.mark.asyncio
+    async def test_run_does_not_truncate_long_tool_result(self):
+        """Regression test for MIT-229: tool results must not be truncated."""
+        st = StateTool("t", {})
+        mock_agent = MagicMock()
+        mock_agent.current_user_id = "user1"
+        mock_agent.pending_tool = {"tool_name": "list_events", "tool_args": {}}
+        mock_agent.task_id = None
+
+        long_result = "event_data:" + ("x" * 5000)
+
+        with patch.object(st, "execute_tool", new_callable=AsyncMock) as mock_exec:
+            mock_exec.return_value = long_result
+
+            result = await st.run([], mock_agent)
+            assert isinstance(result, StateOutput)
+            assert result.content == f"tool `list_events` -> {long_result}"
+            assert result.structured_data["tool_result"] == long_result
+
 
 # --- state_registry ---
 
