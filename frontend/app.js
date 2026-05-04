@@ -37,6 +37,7 @@ setUserLabels();
 // approvals + tasks come from the DB; watching stays local until we wire a watchers table.
 let _lastRenderKey = '';
 const _dismissedTasks = new Set(JSON.parse(localStorage.getItem('ark_dismissed_tasks') || '[]'));
+const _resolvedPlans = new Set(JSON.parse(localStorage.getItem('ark_resolved_plans') || '[]'));
 
 const state = {
   approvals: [],
@@ -261,8 +262,9 @@ function renderMd(s) {
     const tools = (p.required_tools || []).join(', ') || 'none';
     // base64 so HTML attribute quoting never collides with the payload
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(p))));
+    const isResolved = _resolvedPlans.has(b64);
     const card = `
-      <div class="plan-card" data-plan="${b64}">
+      <div class="plan-card${isResolved ? ' resolved' : ''}" data-plan="${b64}">
         <div class="pc-title">${escapeHtml(p.title || 'plan')}</div>
         <ol>${stepsHtml}</ol>
         <div class="pc-tools">tools: ${escapeHtml(tools)}</div>
@@ -284,10 +286,13 @@ document.addEventListener('click', async (e) => {
   if (planApprove || planDecline) {
     const card = (planApprove || planDecline).closest('.plan-card');
     if (!card) return;
+    if (card.classList.contains('resolved')) return;
     const b64 = card.getAttribute('data-plan') || '';
     let plan = null;
     try { plan = JSON.parse(decodeURIComponent(escape(atob(b64)))); } catch {}
     card.classList.add('resolved');
+    _resolvedPlans.add(b64);
+    localStorage.setItem('ark_resolved_plans', JSON.stringify([..._resolvedPlans]));
     if (planDecline) return;
     if (!plan) return;
     try {
