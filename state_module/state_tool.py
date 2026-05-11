@@ -100,10 +100,10 @@ class StateTool(State):
                     "tool_args": pending.get("tool_args") or {},
                 }
                 agent.pending_tool = None
-                forced_next = "executor"
+                in_executor = True
             else:
                 tool_arg_dict = await self.choose_tool(context=context, agent=agent)
-                forced_next = None
+                in_executor = False
 
             task_id = getattr(agent, "task_id", None)
             if task_id and log_event:
@@ -124,15 +124,16 @@ class StateTool(State):
                     payload={"tool_name": tool_arg_dict["tool_name"]},
                 )
 
-            if forced_next:
-                # Inside the executor graph: advance past this plan step
+            if in_executor:
+                # Advance past this plan step and signal the router to loop back.
                 agent.step_idx = getattr(agent, "step_idx", 0) + 1
                 return StateOutput(
                     content=f"tool `{tool_arg_dict['tool_name']}` -> {tool_result}",
                     completion_signal="complete",
-                    structured_data={"tool_result": tool_result, "next_state": forced_next},
+                    structured_data={"tool_result": tool_result, "route": "continue"},
                 )
 
+            # Chat path: single outgoing edge, no route signal needed.
             return StateOutput(
                 content=str(tool_result),
                 completion_signal="complete",

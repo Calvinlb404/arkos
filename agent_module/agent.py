@@ -265,14 +265,11 @@ class Agent:
                 transition_dict = self.flow.get_transitions(self.current_state, messages_list)
                 transition_names = transition_dict["tt"]
 
-                # Deterministic override: a state can force the next transition
-                # by putting "next_state" into StateOutput.structured_data. This is
-                # how executor-style graphs bypass LLM-guided transition choice.
-                forced = None
-                if update and isinstance(update.structured_data, dict):
-                    forced = update.structured_data.get("next_state")
-                if forced and forced in transition_names:
-                    next_state_name = forced
+                router = self.flow.get_router(self.current_state)
+                if router and update:
+                    # State has a registered router: resolve next state from
+                    # the route signal in StateOutput.structured_data. No LLM call.
+                    next_state_name = router(update)
                 elif len(transition_names) == 1:
                     next_state_name = transition_names[0]
                 else:
@@ -351,11 +348,9 @@ class Agent:
                 transition_names = transition_dict["tt"]
                 print(f"agent.py [STREAM] Transitions: {transition_names}")
 
-                forced = None
-                if update and isinstance(update.structured_data, dict):
-                    forced = update.structured_data.get("next_state")
-                if forced and forced in transition_names:
-                    next_state_name = forced
+                router = self.flow.get_router(self.current_state)
+                if router and update:
+                    next_state_name = router(update)
                 elif len(transition_names) == 1:
                     next_state_name = transition_names[0]
                 else:

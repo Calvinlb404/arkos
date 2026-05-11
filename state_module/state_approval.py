@@ -73,7 +73,7 @@ class StateApproval(State):
                 content="(approval state reached without task_id; aborting)",
                 completion_signal="error",
                 error_detail="missing task_id on subagent",
-                structured_data={"next_state": "executor_done"},
+                structured_data={"route": "done"},
             )
 
         task_row = get_task(task_id)
@@ -82,7 +82,7 @@ class StateApproval(State):
                 content="(task row missing)",
                 completion_signal="error",
                 error_detail="task row disappeared",
-                structured_data={"next_state": "executor_done"},
+                structured_data={"route": "done"},
             )
 
         user_id = str(task_row["user_id"])
@@ -121,7 +121,7 @@ class StateApproval(State):
                 return StateOutput(
                     content="(task was cancelled)",
                     completion_signal="complete",
-                    structured_data={"next_state": "executor_done"},
+                    structured_data={"route": "done"},
                 )
 
         if not resolved:
@@ -129,7 +129,7 @@ class StateApproval(State):
             return StateOutput(
                 content="(approval timed out)",
                 completion_signal="error",
-                structured_data={"next_state": "executor_done"},
+                structured_data={"route": "done"},
             )
 
         # Clear the pending ask so the next executor iteration re-evaluates
@@ -163,7 +163,7 @@ class StateApproval(State):
             return StateOutput(
                 content=f"User declined: {prompt}",
                 completion_signal="complete",
-                structured_data={"next_state": "executor_done", "declined": True},
+                structured_data={"route": "done", "declined": True},
             )
 
         # Approved or answered: advance past this plan step and loop back to executor
@@ -173,5 +173,5 @@ class StateApproval(State):
         return StateOutput(
             content=f"Got answer: {answer_text}",
             completion_signal="complete",
-            structured_data={"next_state": "executor"},
+            structured_data={"route": "continue"},
         )

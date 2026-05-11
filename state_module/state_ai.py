@@ -125,7 +125,7 @@ class StateAI(State):
                 content="I had trouble forming a response. Could you rephrase?",
                 completion_signal="error",
                 error_detail="LLM returned empty content",
-                structured_data={"next_state": "ask_user"},
+                structured_data={"route": "ask"},
             )
 
         try:
@@ -136,29 +136,24 @@ class StateAI(State):
             return StateOutput(
                 content=output.content,
                 completion_signal="complete",
-                structured_data={"next_state": "ask_user"},
+                structured_data={"route": "ask"},
             )
 
         user_text = (data.final or "").strip()
         if not user_text:
             user_text = "(no content)"
 
-        # Deterministic routing. The chat graph has [ask_user, use_tool, workshop_plan]
-        # as transitions; we map reply/ask to ask_user (hand back to the user) and
-        # plan to workshop_plan. use_tool is NEVER chosen from this state directly,
-        # that path is reserved for post-approval execution.
+        # Emit a route signal. agent_reply_router in routers.py maps this to
+        # a concrete next state. State names never appear here.
         if data.route == _Route.plan:
-            next_state = "workshop_plan"
             signal = "complete"
         elif data.route == _Route.ask:
-            next_state = "ask_user"
             signal = "needs_input"
         else:
-            next_state = "ask_user"
             signal = "complete"
 
         return StateOutput(
             content=user_text,
             completion_signal=signal,
-            structured_data={"next_state": next_state, "route": data.route.value},
+            structured_data={"route": data.route.value},
         )

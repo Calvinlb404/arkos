@@ -75,7 +75,7 @@ class StateExecutor(State):
             return StateOutput(
                 content="",
                 completion_signal="complete",
-                structured_data={"next_state": "executor_done"},
+                structured_data={"route": "done"},
             )
 
         current_step = plan_steps[step_idx]
@@ -165,7 +165,7 @@ class StateExecutor(State):
                 return StateOutput(
                     content="",
                     completion_signal="incomplete",
-                    structured_data={"next_state": "ask_human"},
+                    structured_data={"route": "ask"},
                 )
 
             agent.pending_tool = {
@@ -175,7 +175,7 @@ class StateExecutor(State):
             return StateOutput(
                 content=f"calling tool `{decision.tool_name}` for step {step_idx + 1}",
                 completion_signal="incomplete",
-                structured_data={"next_state": "use_tool"},
+                structured_data={"route": "tool"},
             )
 
         # action == ask
@@ -186,5 +186,5 @@ class StateExecutor(State):
         return StateOutput(
             content="",
             completion_signal="incomplete",
-            structured_data={"next_state": "ask_human"},
+            structured_data={"route": "ask"},
         )

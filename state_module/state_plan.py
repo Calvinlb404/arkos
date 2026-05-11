@@ -149,7 +149,7 @@ class StatePlan(State):
             return StateOutput(
                 content=question or "Could you tell me more about what you want to do?",
                 completion_signal="needs_input",
-                structured_data={"next_state": "ask_user", "route": "ask"},
+                structured_data={"route": "ask"},
             )
 
         plan_text = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(plan.plan_steps))

@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -8,6 +8,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from state_module.state import State
 from state_module.state_registry import STATE_REGISTRY, auto_register_states
+from state_module.routers import ROUTERS
 
 auto_register_states("state_module")
 
@@ -49,3 +50,11 @@ class StateHandler:
     def get_state(self, state_name: str) -> State:
         """Look up a state by name."""
         return self.states[state_name]
+
+    def get_router(self, state: State) -> Callable | None:
+        """Return the router function for a state, or None if it has no router.
+
+        States without a router fall through to the single-edge deterministic
+        path or choose_transition in agent.py.
+        """
+        return ROUTERS.get(state.name)
