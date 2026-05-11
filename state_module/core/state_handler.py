@@ -24,7 +24,8 @@ from __future__ import annotations
 import importlib
 import inspect
 import pkgutil
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import yaml
 

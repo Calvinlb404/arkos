@@ -15,10 +15,10 @@ from __future__ import annotations
 
 try:
     from enum import StrEnum
-except ImportError:  # Python < 3.11
+except ImportError:  # Python < 3.11 (test environments only)
     from enum import Enum
 
-    class StrEnum(str, Enum):  # type: ignore[no-redef]
+    class StrEnum(str, Enum):  # type: ignore[no-redef]  # noqa: UP042
         pass
 
 from pydantic import BaseModel, Field
