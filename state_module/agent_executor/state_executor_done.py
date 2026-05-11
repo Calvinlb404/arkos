@@ -1,21 +1,18 @@
 """
-Terminal state for the executor graph. Writes a short summary event and
-returns. TaskRunner is the one that flips tasks.status to 'completed'
-after step() returns, so this state's job is just to produce the final
-user-visible message.
+Terminal state for the executor graph.
+
+Writes a short summary event and returns. TaskRunner flips tasks.status to
+'completed' after step() returns; this state's job is just to produce the
+final user-visible summary message.
 """
 
 from __future__ import annotations
 
-import os
-import sys
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from base_module.task_store import log_event  # noqa: E402
-from state_module.base_state import StateOutput  # noqa: E402
-from state_module.state import State  # noqa: E402
-from state_module.state_registry import register_state  # noqa: E402
+from base_module.task_store import log_event
+from model_module.ArkModelNew import SystemMessage
+from state_module.core.base_state import StateOutput
+from state_module.core.state import State
+from state_module.core.state_registry import register_state
 
 
 @register_state
@@ -30,14 +27,10 @@ class StateExecutorDone(State):
         return True
 
     async def run(self, context, agent=None):
-        from model_module.ArkModelNew import SystemMessage
-
         task_id = getattr(agent, "task_id", None)
         plan_steps = getattr(agent, "plan_steps", []) or []
         step_idx = getattr(agent, "step_idx", 0)
 
-        # Ask the LLM to produce a user-facing summary of what was actually done.
-        # The context contains all tool results stored by add_context during execution.
         try:
             system = SystemMessage(
                 content=(

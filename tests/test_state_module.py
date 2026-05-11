@@ -7,12 +7,12 @@ import pytest
 import yaml
 
 from model_module.ArkModelNew import AIMessage, SystemMessage
-from state_module.base_state import StateOutput
-from state_module.state import State
-from state_module.state_ai import ReasonedOutput, StateAI
-from state_module.state_registry import STATE_REGISTRY, register_state
-from state_module.state_tool import StateTool
-from state_module.state_user import StateUser
+from state_module.agent_buddy.state_ai import ReasonedOutput, StateAI
+from state_module.agent_buddy.state_tool import StateTool
+from state_module.agent_buddy.state_user import StateUser
+from state_module.core.base_state import StateOutput
+from state_module.core.state import State
+from state_module.core.state_registry import STATE_REGISTRY, register_state
 
 # --- State base class ---
 
@@ -153,7 +153,7 @@ class TestStateAI:
         # stay internal (chain-of-thought hiding).
         assert result.content == "Here is your answer."
         assert "step 1" not in result.content
-        assert result.structured_data["next_state"] == "ask_user"
+        # Router pattern: state emits a route signal, not a next_state name.
         assert result.structured_data["route"] == "reply"
 
     @pytest.mark.asyncio
@@ -167,7 +167,8 @@ class TestStateAI:
         assert isinstance(result, StateOutput)
         # Soft fallback: surface the raw content, hand back to the user.
         assert result.content == "not valid json at all"
-        assert result.structured_data["next_state"] == "ask_user"
+        # Router pattern: fallback emits route="ask" signal.
+        assert result.structured_data["route"] == "ask"
 
     @pytest.mark.asyncio
     async def test_run_with_none_content(self):
@@ -195,7 +196,8 @@ class TestStateAI:
         mock_agent.call_llm = AsyncMock(return_value=AIMessage(content=reasoned.model_dump_json()))
 
         result = await sa.run([], mock_agent)
-        assert result.structured_data["next_state"] == "workshop_plan"
+        # Router pattern: plan route emits signal "plan"; buddy/routers.py maps it to workshop_plan.
+        assert result.structured_data["route"] == "plan"
         assert result.completion_signal == "complete"
 
     @pytest.mark.asyncio
@@ -213,7 +215,8 @@ class TestStateAI:
 
         result = await sa.run([], mock_agent)
         assert "Could you clarify?" in result.content
-        assert result.structured_data["next_state"] == "ask_user"
+        # Router pattern: ask route emits signal "ask".
+        assert result.structured_data["route"] == "ask"
         assert result.completion_signal == "needs_input"
 
 
@@ -270,7 +273,7 @@ class TestStateTool:
             }
         )
 
-        result = await st.choose_tool([SystemMessage(content="find something")], mock_agent)
+        result = await st._choose_tool([SystemMessage(content="find something")], mock_agent)
         assert result["tool_name"] == "search"
         assert result["tool_args"] == {"query": "test"}
 
@@ -282,7 +285,7 @@ class TestStateTool:
         mock_agent.tool_manager = MagicMock()
         mock_agent.tool_manager.call_tool = AsyncMock(return_value={"result": "ok"})
 
-        result = await st.execute_tool({"tool_name": "search", "tool_args": {"q": "test"}}, mock_agent)
+        result = await st._execute_tool({"tool_name": "search", "tool_args": {"q": "test"}}, mock_agent)
         assert result == {"result": "ok"}
         mock_agent.tool_manager.call_tool.assert_called_once_with(
             tool_name="search", arguments={"q": "test"}, user_id="user1"
@@ -293,15 +296,10 @@ class TestStateTool:
         st = StateTool("t", {})
         mock_agent = MagicMock()
         mock_agent.current_user_id = "user1"
-        # Force the chat path: pending_tool/task_id default to truthy MagicMocks
-        # otherwise, which would route us through the executor branch and try
-        # to log_event into a real Postgres.
-        mock_agent.pending_tool = None
-        mock_agent.task_id = None
 
         with (
-            patch.object(st, "choose_tool", new_callable=AsyncMock) as mock_choose,
-            patch.object(st, "execute_tool", new_callable=AsyncMock) as mock_exec,
+            patch.object(st, "_choose_tool", new_callable=AsyncMock) as mock_choose,
+            patch.object(st, "_execute_tool", new_callable=AsyncMock) as mock_exec,
         ):
             mock_choose.return_value = {"tool_name": "calc", "tool_args": {"x": 1}}
             mock_exec.return_value = "42"
@@ -316,17 +314,20 @@ class TestStateTool:
         st = StateTool("t", {})
         mock_agent = MagicMock()
         mock_agent.current_user_id = "user1"
-        mock_agent.pending_tool = {"tool_name": "list_events", "tool_args": {}}
-        mock_agent.task_id = None
 
         long_result = "event_data:" + ("x" * 5000)
 
-        with patch.object(st, "execute_tool", new_callable=AsyncMock) as mock_exec:
+        with (
+            patch.object(st, "_choose_tool", new_callable=AsyncMock) as mock_choose,
+            patch.object(st, "_execute_tool", new_callable=AsyncMock) as mock_exec,
+        ):
+            mock_choose.return_value = {"tool_name": "list_events", "tool_args": {}}
             mock_exec.return_value = long_result
 
             result = await st.run([], mock_agent)
             assert isinstance(result, StateOutput)
-            assert result.content == f"tool `list_events` -> {long_result}"
+            # buddy state_tool returns the raw result; no "tool `name` ->" prefix
+            assert result.content == long_result
             assert result.structured_data["tool_result"] == long_result
 
 
@@ -386,31 +387,33 @@ class TestStateHandler:
         f.write_text(yaml.dump(graph))
         return str(f)
 
-    def test_init_loads_states(self, state_graph_yaml):
-        from state_module.state_handler import StateHandler
+    _BUDDY_PKG = "state_module.agent_buddy"
 
-        handler = StateHandler(state_graph_yaml)
+    def test_init_loads_states(self, state_graph_yaml):
+        from state_module.core.state_handler import StateHandler
+
+        handler = StateHandler(state_graph_yaml, agent_pkg=self._BUDDY_PKG)
         assert "agent_reply" in handler.states
         assert "wait_for_user" in handler.states
 
     def test_get_initial_state(self, state_graph_yaml):
-        from state_module.state_handler import StateHandler
+        from state_module.core.state_handler import StateHandler
 
-        handler = StateHandler(state_graph_yaml)
+        handler = StateHandler(state_graph_yaml, agent_pkg=self._BUDDY_PKG)
         initial = handler.get_initial_state()
         assert initial.name == "agent_reply"
         assert isinstance(initial, StateAI)
 
     def test_get_state(self, state_graph_yaml):
-        from state_module.state_handler import StateHandler
+        from state_module.core.state_handler import StateHandler
 
-        handler = StateHandler(state_graph_yaml)
+        handler = StateHandler(state_graph_yaml, agent_pkg=self._BUDDY_PKG)
         user_state = handler.get_state("wait_for_user")
         assert isinstance(user_state, StateUser)
         assert user_state.is_terminal is True
 
     def test_unknown_state_type_raises(self, tmp_path):
-        from state_module.state_handler import StateHandler
+        from state_module.core.state_handler import StateHandler
 
         graph = {
             "initial": "bad",
@@ -419,4 +422,4 @@ class TestStateHandler:
         f = tmp_path / "bad_graph.yaml"
         f.write_text(yaml.dump(graph))
         with pytest.raises(ValueError, match="Unknown state type"):
-            StateHandler(str(f))
+            StateHandler(str(f), agent_pkg=self._BUDDY_PKG)

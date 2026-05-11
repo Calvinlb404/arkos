@@ -1,7 +1,8 @@
 """
-Executor state. Runs inside a subagent (TaskRunner) and walks plan_steps one
-at a time. For each step it decides whether the next action is a tool call
-or a human question, records the decision, and forces the FSM transition.
+Executor decision state. Runs inside a subagent (TaskRunner) and walks
+plan_steps one at a time. For each step it decides whether the next action
+is a tool call or a human question, then emits a route signal so the
+executor_router in routers.py can pick the right next state.
 
 Never re-plans. If a step can't be handled by the available tools, it routes
 to ask_human instead of silently deviating.
@@ -9,19 +10,15 @@ to ask_human instead of silently deviating.
 
 from __future__ import annotations
 
-import os
-import sys
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from base_module.task_store import log_event  # noqa: E402
-from model_module.ArkModelNew import SystemMessage  # noqa: E402
-from state_module.base_state import StateOutput  # noqa: E402
-from state_module.state import State  # noqa: E402
-from state_module.state_registry import register_state  # noqa: E402
+from base_module.task_store import log_event
+from model_module.ArkModelNew import SystemMessage
+from state_module.core.base_state import StateOutput
+from state_module.core.state import State
+from state_module.core.state_registry import register_state
 
 
 class _ActionKind(StrEnum):
@@ -54,7 +51,7 @@ class ExecutorDecision(BaseModel):
 
 @register_state
 class StateExecutor(State):
-    """Subagent decision state. Picks the next step's action deterministically."""
+    """Subagent decision state. Picks the next step's action and emits a route signal."""
 
     type = "executor"
 
@@ -70,7 +67,6 @@ class StateExecutor(State):
         step_idx: int = getattr(agent, "step_idx", 0)
         task_id: str | None = getattr(agent, "task_id", None)
 
-        # --- no more steps -> done ------------------------------------------
         if step_idx >= len(plan_steps):
             return StateOutput(
                 content="",
@@ -80,7 +76,6 @@ class StateExecutor(State):
 
         current_step = plan_steps[step_idx]
 
-        # Describe available tools to the LLM. Keep the description compact.
         tool_lines: list[str] = []
         tool_names: list[str] = []
         if agent.tool_manager is not None:
@@ -89,14 +84,14 @@ class StateExecutor(State):
                 for _server, tools in servers.items():
                     for tname, tspec in tools.items():
                         tool_names.append(tname)
-                        desc = ""
-                        if isinstance(tspec, dict):
-                            desc = tspec.get("description", "") or ""
-                        else:
-                            desc = getattr(tspec, "description", "") or ""
+                        desc = (
+                            tspec.get("description", "") if isinstance(tspec, dict)
+                            else getattr(tspec, "description", "")
+                        ) or ""
                         tool_lines.append(f"- {tname}: {desc[:160]}")
             except Exception as e:
-                log_event(task_id, "error", f"could not list tools: {e}") if task_id else None
+                if task_id:
+                    log_event(task_id, "error", f"could not list tools: {e}")
 
         tools_block = "\n".join(tool_lines) if tool_lines else "(no tools available)"
 
@@ -129,7 +124,6 @@ class StateExecutor(State):
         except Exception as e:
             if task_id:
                 log_event(task_id, "error", f"executor decision parse failed: {e}")
-            # Default to asking the human so the subagent doesn't crash silently
             decision = ExecutorDecision(
                 action=_ActionKind.ask,
                 reason=f"could not parse decision: {e}",
@@ -146,20 +140,17 @@ class StateExecutor(State):
             )
 
         if decision.action == _ActionKind.tool:
-            # Validate tool name against the live list so we don't send garbage
             if not decision.tool_name or (tool_names and decision.tool_name not in tool_names):
-                # fall back to asking the human if the LLM picked a fake tool
                 agent.pending_ask = {
                     "kind": "text",
                     "prompt": (
-                        f"I need to do: {current_step}\nBut I don't have a tool that matches. How should I handle this?"
+                        f"I need to do: {current_step}\n"
+                        f"But I don't have a tool that matches. How should I handle this?"
                     ),
                 }
                 if task_id:
                     log_event(
-                        task_id,
-                        "fallback_ask",
-                        "invalid tool name from LLM",
+                        task_id, "fallback_ask", "invalid tool name from LLM",
                         payload={"llm_choice": decision.tool_name},
                     )
                 return StateOutput(

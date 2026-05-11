@@ -11,13 +11,9 @@ class State:
         self.transition = config.get("transition", {})
 
     def check_transition_ready(self, context: dict[str, Any]) -> bool:
-        """
-        USER DEFINED STATES SHOULD OVERRRIDE THIS FUNCTION
-        """
+        """Subclasses must override. Return True when the state is ready to transition."""
         raise NotImplementedError
 
     def run(self, context: dict[str, Any]) -> dict[str, Any] | None:
-        """
-        USER DEFINED STATES SHOULD OVERRRIDE THIS FUNCTION
-        """
+        """Subclasses must override. Execute the state's logic and return a StateOutput."""
         raise NotImplementedError
