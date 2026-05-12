@@ -85,7 +85,8 @@ class StateExecutor(State):
                     for tname, tspec in tools.items():
                         tool_names.append(tname)
                         desc = (
-                            tspec.get("description", "") if isinstance(tspec, dict)
+                            tspec.get("description", "")
+                            if isinstance(tspec, dict)
                             else getattr(tspec, "description", "")
                         ) or ""
                         tool_lines.append(f"- {tname}: {desc[:160]}")
@@ -144,13 +145,14 @@ class StateExecutor(State):
                 agent.pending_ask = {
                     "kind": "text",
                     "prompt": (
-                        f"I need to do: {current_step}\n"
-                        f"But I don't have a tool that matches. How should I handle this?"
+                        f"I need to do: {current_step}\nBut I don't have a tool that matches. How should I handle this?"
                     ),
                 }
                 if task_id:
                     log_event(
-                        task_id, "fallback_ask", "invalid tool name from LLM",
+                        task_id,
+                        "fallback_ask",
+                        "invalid tool name from LLM",
                         payload={"llm_choice": decision.tool_name},
                     )
                 return StateOutput(

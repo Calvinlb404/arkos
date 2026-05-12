@@ -114,10 +114,7 @@ class StateHandler:
     def get_transitions(self, current_state: State, context: Any) -> dict:
         """Return available transitions from the current state as target names and descriptions."""
         transition_targets = current_state.transition.get("next", [])
-        transition_descs = [
-            (t, getattr(self.states[t], "description", None))
-            for t in transition_targets
-        ]
+        transition_descs = [(t, getattr(self.states[t], "description", None)) for t in transition_targets]
         return {"td": transition_descs, "tt": transition_targets}
 
     def get_state(self, state_name: str) -> State:

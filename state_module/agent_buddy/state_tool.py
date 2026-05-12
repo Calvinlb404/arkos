@@ -88,11 +88,7 @@ class StateTool(State):
             )
 
         except AuthRequiredError as e:
-            service_label = (
-                e.service_info.get("name", e.service)
-                if getattr(e, "service_info", None)
-                else e.service
-            )
+            service_label = e.service_info.get("name", e.service) if getattr(e, "service_info", None) else e.service
             link = e.setup_url or e.connect_url or ""
             if link:
                 body = (

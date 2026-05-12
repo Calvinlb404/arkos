@@ -133,9 +133,7 @@ class StateApproval(State):
             answer_text = resolved["response_text"] or ""
 
         try:
-            await agent.memory.add_memory(
-                UserMessage(content=f"[human answer for '{prompt}']: {answer_text}")
-            )
+            await agent.memory.add_memory(UserMessage(content=f"[human answer for '{prompt}']: {answer_text}"))
         except Exception as e:
             log_event(task_id, "error", f"could not write answer to memory: {e}")
 

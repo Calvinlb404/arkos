@@ -21,6 +21,7 @@ except ImportError:  # Python < 3.11 (test environments only)
     class StrEnum(str, Enum):  # type: ignore[no-redef]  # noqa: UP042
         pass
 
+
 from pydantic import BaseModel, Field
 
 from model_module.ArkModelNew import SystemMessage
@@ -30,9 +31,9 @@ from state_module.core.state_registry import register_state
 
 
 class _Route(StrEnum):
-    reply = "reply"   # stay in chat; answer in final
-    ask = "ask"       # stay in chat; ask a clarifying question
-    plan = "plan"     # hand off to workshop_plan
+    reply = "reply"  # stay in chat; answer in final
+    ask = "ask"  # stay in chat; ask a clarifying question
+    plan = "plan"  # hand off to workshop_plan
 
 
 class ReasonedOutput(BaseModel):

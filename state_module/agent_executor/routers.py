@@ -57,7 +57,7 @@ def ask_human_router(output: StateOutput) -> str:
 
 #: Maps state name (as in graph.yaml) -> router function.
 ROUTERS: dict[str, callable] = {
-    "executor":  executor_router,
-    "use_tool":  use_tool_router,
+    "executor": executor_router,
+    "use_tool": use_tool_router,
     "ask_human": ask_human_router,
 }

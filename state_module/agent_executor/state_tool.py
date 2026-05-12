@@ -54,19 +54,14 @@ class StateExecutorTool(State):
             log_event(task_id, "tool_call", tool_name, payload={"args": tool_args})
 
         try:
-            tool_result = await self._execute_tool(
-                {"tool_name": tool_name, "tool_args": tool_args}, agent
-            )
+            tool_result = await self._execute_tool({"tool_name": tool_name, "tool_args": tool_args}, agent)
         except AuthRequiredError as e:
-            service_label = (
-                e.service_info.get("name", e.service)
-                if getattr(e, "service_info", None)
-                else e.service
-            )
+            service_label = e.service_info.get("name", e.service) if getattr(e, "service_info", None) else e.service
             link = e.setup_url or e.connect_url or ""
             body = (
                 f"To complete this step I need access to **{service_label}**, "
-                f"but it isn't connected. Setup link: {link}" if link
+                f"but it isn't connected. Setup link: {link}"
+                if link
                 else f"To complete this step I need access to **{service_label}**, but no setup URL was returned."
             )
             # Route back to ask_human so the user can unblock the subagent.

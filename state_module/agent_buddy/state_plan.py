@@ -92,10 +92,21 @@ class StatePlan(State):
 
         # Guardrail: reject pseudo-plans where every step is just asking the user for info.
         _CLARIFY_TOKENS = (
-            "ask the user", "ask user", "request the user", "request more",
-            "request info", "request information", "prompt the user", "prompt for",
-            "inquire", "clarify", "confirm with the user", "check with the user",
-            "get the user", "obtain from the user", "gather from the user",
+            "ask the user",
+            "ask user",
+            "request the user",
+            "request more",
+            "request info",
+            "request information",
+            "prompt the user",
+            "prompt for",
+            "inquire",
+            "clarify",
+            "confirm with the user",
+            "check with the user",
+            "get the user",
+            "obtain from the user",
+            "gather from the user",
         )
 
         def _is_clarify_step(s: str) -> bool:
@@ -111,11 +122,16 @@ class StatePlan(State):
         if plan.plan_steps and not action_steps:
             question_src = plan.plan_steps[0].lstrip("0123456789. -")
             for prefix in (
-                "Ask the user to ", "Ask user to ", "Request the user to ",
-                "Prompt the user to ", "Ask ", "Request ", "Prompt ",
+                "Ask the user to ",
+                "Ask user to ",
+                "Request the user to ",
+                "Prompt the user to ",
+                "Ask ",
+                "Request ",
+                "Prompt ",
             ):
                 if question_src.lower().startswith(prefix.lower()):
-                    question_src = question_src[len(prefix):]
+                    question_src = question_src[len(prefix) :]
                     break
             question = question_src.strip().rstrip(".")
             if question and not question.endswith("?"):
