@@ -1,35 +1,31 @@
 """
-Approval/ask-human state. Writes a task_approvals row, flips the parent task
-to awaiting_approval, then DB-polls until the user responds.
+Approval/ask-human state for the executor graph.
+
+Writes a task_approvals row, flips the parent task to awaiting_approval,
+then DB-polls until the user responds. DB polling survives web-process
+restarts because the state can be rehydrated from the DB row.
 
 Supports two kinds:
   binary  -> the UI shows approve/decline buttons
-  text    -> the UI shows a textarea; whatever the user types becomes the answer
-
-DB polling is intentional: it survives web-process restarts because the state
-can be rehydrated from the DB row.
+  text    -> the UI shows a textarea; whatever the user types is the answer
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
-import sys
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from base_module.task_store import (  # noqa: E402
+from base_module.task_store import (
     create_approval,
     get_approval,
     get_task,
     log_event,
     set_task_status,
 )
-from config_module.loader import config  # noqa: E402
-from model_module.ArkModelNew import UserMessage  # noqa: E402
-from state_module.base_state import StateOutput  # noqa: E402
-from state_module.state import State  # noqa: E402
-from state_module.state_registry import register_state  # noqa: E402
+from config_module.loader import config
+from model_module.ArkModelNew import UserMessage
+from state_module.core.base_state import StateOutput
+from state_module.core.state import State
+from state_module.core.state_registry import register_state
 
 
 @register_state
@@ -54,7 +50,6 @@ class StateApproval(State):
 
     @property
     def _poll_timeout(self) -> float:
-        # Default to a long but finite timeout so tests don't hang forever.
         try:
             return float(config.get("approval.poll_timeout_seconds") or 60 * 60 * 24)
         except Exception:
@@ -73,7 +68,7 @@ class StateApproval(State):
                 content="(approval state reached without task_id; aborting)",
                 completion_signal="error",
                 error_detail="missing task_id on subagent",
-                structured_data={"next_state": "executor_done"},
+                structured_data={"route": "done"},
             )
 
         task_row = get_task(task_id)
@@ -82,7 +77,7 @@ class StateApproval(State):
                 content="(task row missing)",
                 completion_signal="error",
                 error_detail="task row disappeared",
-                structured_data={"next_state": "executor_done"},
+                structured_data={"route": "done"},
             )
 
         user_id = str(task_row["user_id"])
@@ -103,7 +98,6 @@ class StateApproval(State):
             payload={"approval_id": approval_id, "kind": kind},
         )
 
-        # Poll the DB until resolved (or timeout)
         interval = self._poll_interval
         deadline_left = self._poll_timeout
         resolved = None
@@ -114,14 +108,13 @@ class StateApproval(State):
             if row and row["status"] != "pending":
                 resolved = row
                 break
-            # also bail if the whole task got cancelled from the UI
             task_now = get_task(task_id)
             if task_now and task_now["status"] in ("cancelled", "failed"):
                 log_event(task_id, "approval_aborted", "task was cancelled while awaiting approval")
                 return StateOutput(
                     content="(task was cancelled)",
                     completion_signal="complete",
-                    structured_data={"next_state": "executor_done"},
+                    structured_data={"route": "done"},
                 )
 
         if not resolved:
@@ -129,19 +122,16 @@ class StateApproval(State):
             return StateOutput(
                 content="(approval timed out)",
                 completion_signal="error",
-                structured_data={"next_state": "executor_done"},
+                structured_data={"route": "done"},
             )
 
-        # Clear the pending ask so the next executor iteration re-evaluates
         agent.pending_ask = None
 
-        # Put the answer into memory so the next executor decision sees it
         if resolved["kind"] == "binary":
             answer_text = "user approved" if resolved["response_bool"] else "user declined"
         else:
             answer_text = resolved["response_text"] or ""
 
-        # Record the human answer as a UserMessage so the next step's LLM sees it
         try:
             await agent.memory.add_memory(UserMessage(content=f"[human answer for '{prompt}']: {answer_text}"))
         except Exception as e:
@@ -158,20 +148,18 @@ class StateApproval(State):
             },
         )
 
-        # Declined binary approval => end the task
         if resolved["kind"] == "binary" and not resolved["response_bool"]:
             return StateOutput(
                 content=f"User declined: {prompt}",
                 completion_signal="complete",
-                structured_data={"next_state": "executor_done", "declined": True},
+                structured_data={"route": "done", "declined": True},
             )
 
-        # Approved or answered: advance past this plan step and loop back to executor
         agent.step_idx = getattr(agent, "step_idx", 0) + 1
         set_task_status(task_id, "running")
 
         return StateOutput(
             content=f"Got answer: {answer_text}",
             completion_signal="complete",
-            structured_data={"next_state": "executor"},
+            structured_data={"route": "continue"},
         )

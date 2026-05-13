@@ -14,7 +14,7 @@ states:
 
   use_tool:
     description: "executes the tool chosen for the current plan step"
-    type: tool
+    type: executor_tool
     transition:
       next: [executor]
 

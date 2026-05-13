@@ -5,23 +5,20 @@ The plan is NOT persisted to the DB from this state. It's returned to the
 chat layer as structured_data so the frontend can render an inline plan card
 with approve/decline buttons. On approve, the frontend calls POST /tasks
 which mints a task row (status='running') and spawns a subagent via the
-task runner. Pending Approvals on the desk is now reserved for mid-flight
+task runner. Pending Approvals on the desk is reserved for mid-flight
 checkpoints raised by running subagents, not initial plan approval.
 """
 
 from __future__ import annotations
 
-import os
-import sys
+import json as _json
 
 from pydantic import BaseModel, Field
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from model_module.ArkModelNew import SystemMessage  # noqa: E402
-from state_module.base_state import StateOutput  # noqa: E402
-from state_module.state import State  # noqa: E402
-from state_module.state_registry import register_state  # noqa: E402
+from model_module.ArkModelNew import SystemMessage
+from state_module.core.base_state import StateOutput
+from state_module.core.state import State
+from state_module.core.state_registry import register_state
 
 
 class WorkshopOutput(BaseModel):
@@ -36,13 +33,13 @@ class WorkshopOutput(BaseModel):
 
 @register_state
 class StatePlan(State):
-    """`plan` state. Drafts a plan, persists it as a pending task, hands control back."""
+    """`plan` state. Drafts a plan, streams it back, hands control to the user."""
 
     type = "plan"
 
     def __init__(self, name: str, config: dict):
         super().__init__(name, config)
-        # Terminal so the agent loop returns to the user for approval via the dashboard
+        # Terminal so the agent loop returns to the user for approval.
         self.is_terminal = True
 
     def check_transition_ready(self, context):
@@ -80,23 +77,20 @@ class StatePlan(State):
 
         try:
             plan = WorkshopOutput.model_validate_json(output.content)
-        except Exception as e:  # schema violation; surface the raw text
+        except Exception as e:
             return StateOutput(
                 content=output.content,
                 completion_signal="needs_input",
                 error_detail=f"plan parse failed: {e}",
             )
 
-        # If buddy still needs info, don't persist yet.
         if plan.needs_clarification and plan.clarifying_question:
             return StateOutput(
                 content=plan.clarifying_question,
                 completion_signal="needs_input",
             )
 
-        # Guardrail: reject pseudo-plans where every "step" is actually just
-        # asking the user for more info. Those should be clarifying questions,
-        # not an approve/decline card.
+        # Guardrail: reject pseudo-plans where every step is just asking the user for info.
         _CLARIFY_TOKENS = (
             "ask the user",
             "ask user",
@@ -126,11 +120,7 @@ class StatePlan(State):
         action_steps = [s for s in plan.plan_steps if not _is_clarify_step(s)]
 
         if plan.plan_steps and not action_steps:
-            # Fall back to treating the plan as a clarification. Phrase the
-            # first step as a direct question to the user.
             question_src = plan.plan_steps[0].lstrip("0123456789. -")
-            # Strip common imperative openings so the output reads like a
-            # question instead of an instruction buddy gave itself.
             for prefix in (
                 "Ask the user to ",
                 "Ask user to ",
@@ -149,17 +139,10 @@ class StatePlan(State):
             return StateOutput(
                 content=question or "Could you tell me more about what you want to do?",
                 completion_signal="needs_input",
-                structured_data={"next_state": "ask_user", "route": "ask"},
+                structured_data={"route": "ask"},
             )
 
         plan_text = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(plan.plan_steps))
-
-        # The plan is NOT written to the DB here. We stream it back to the
-        # frontend as a human-readable body plus a sentinel JSON block the
-        # frontend parses to render an inline plan card (approve/decline).
-        # On approve, the frontend calls POST /tasks, which mints the task
-        # row and spawns the runner.
-        import json as _json
 
         payload = {
             "kind": "plan_proposal",

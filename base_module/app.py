@@ -19,7 +19,8 @@ from base_module.users import router as users_router
 from config_module.loader import config
 from memory_module.memory import Memory
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage
-from state_module.state_handler import StateHandler
+from state_module.agent_buddy.routers import ROUTERS as BUDDY_ROUTERS
+from state_module.core.state_handler import StateHandler
 from tool_module.smithery import AuthRequiredError
 from tool_module.tool_call import MCPToolManager
 
@@ -47,7 +48,11 @@ else:
 
 
 # Shared singletons (no per-user state)
-flow = StateHandler(yaml_path=config.get("state.graph_path"))
+flow = StateHandler(
+    yaml_path=config.get("state.graph_path"),
+    agent_pkg="state_module.agent_buddy",
+    routers=BUDDY_ROUTERS,
+)
 llm = ArkModelLink(base_url=config.get("llm.base_url"), max_tokens=config.get("llm.max_tokens"))
 
 # Per-user memory cache — keyed by user_id string.

@@ -1,46 +1,37 @@
 """
 Chat/reasoning state for buddy.
 
-This is the default state on the main chat graph. It owns three responsibilities:
+Owns three responsibilities:
+1. Respond conversationally when no external action is needed.
+2. Workshop vague requests by asking clarifying questions.
+3. Hand off to workshop_plan only when the user has clearly asked for a
+   concrete multi-step action on an external system.
 
-1. Respond to the user in natural language when the question is conversational
-   (no external action needed).
-2. Workshop the user's request in chat when it's vague, until a concrete plan
-   is in view. This is where buddy asks clarifying questions.
-3. Decide to hand off to `workshop_plan` ONLY when the user has clearly asked
-   for a concrete multi-step action on an external system.
-
-Key fixes landed here:
-- The state now sees the full tool listing (via agent.system_prompt) so buddy
-  doesn't falsely claim "I don't have access to Linear" when the Linear MCP
-  is wired up.
-- The state's own reasoning "approach" is NOT shown to the user. It stays
-  internal. Only `final` (the user-facing message) is returned as content.
-- The state picks its own next_state via structured_data.next_state instead of
-  leaving the decision to the LLM-based choose_transition pass. That stops
-  buddy from jumping into workshop_plan every time "external systems" is
-  mentioned in passing.
+Routing is done by emitting a route signal in structured_data. The
+agent_reply_router in buddy/routers.py maps signals to state names.
 """
 
 from __future__ import annotations
 
-import os
-import sys
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except ImportError:  # Python < 3.11 (test environments only)
+    from enum import Enum
+
+    class StrEnum(str, Enum):  # type: ignore[no-redef]  # noqa: UP042
+        pass
+
 
 from pydantic import BaseModel, Field
 
 from model_module.ArkModelNew import SystemMessage
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from state_module.base_state import StateOutput  # noqa: E402
-from state_module.state import State  # noqa: E402
-from state_module.state_registry import register_state  # noqa: E402
+from state_module.core.base_state import StateOutput
+from state_module.core.state import State
+from state_module.core.state_registry import register_state
 
 
 class _Route(StrEnum):
-    reply = "reply"  # stay in chat; just say `final`
+    reply = "reply"  # stay in chat; answer in final
     ask = "ask"  # stay in chat; ask a clarifying question
     plan = "plan"  # hand off to workshop_plan
 
@@ -86,9 +77,6 @@ class StateAI(State):
             },
         }
 
-        # Start from the agent's root system prompt (which carries the live
-        # tool listing so buddy knows Linear/Gmail/Calendar/etc exist). Fall
-        # back to an empty string if the startup hook hasn't populated it.
         root_prompt = (getattr(agent, "system_prompt", None) or "").strip()
 
         chat_guidance = (
@@ -116,49 +104,32 @@ class StateAI(State):
         system_parts.append(chat_guidance)
 
         system = SystemMessage(content="\n\n".join(system_parts))
-
-        llm_context = [system] + messages
-        output = await agent.call_llm(context=llm_context, json_schema=json_schema)
+        output = await agent.call_llm(context=[system] + messages, json_schema=json_schema)
 
         if not output or not output.content:
             return StateOutput(
                 content="I had trouble forming a response. Could you rephrase?",
                 completion_signal="error",
                 error_detail="LLM returned empty content",
-                structured_data={"next_state": "ask_user"},
+                structured_data={"route": "ask"},
             )
 
         try:
             data = ReasonedOutput.model_validate_json(output.content)
         except Exception as e:
-            # Soft fallback: surface the raw text and stay in chat.
             print(f"[state_ai] schema parse failed: {e}")
             return StateOutput(
                 content=output.content,
                 completion_signal="complete",
-                structured_data={"next_state": "ask_user"},
+                structured_data={"route": "ask"},
             )
 
-        user_text = (data.final or "").strip()
-        if not user_text:
-            user_text = "(no content)"
+        user_text = (data.final or "").strip() or "(no content)"
 
-        # Deterministic routing. The chat graph has [ask_user, use_tool, workshop_plan]
-        # as transitions; we map reply/ask to ask_user (hand back to the user) and
-        # plan to workshop_plan. use_tool is NEVER chosen from this state directly,
-        # that path is reserved for post-approval execution.
-        if data.route == _Route.plan:
-            next_state = "workshop_plan"
-            signal = "complete"
-        elif data.route == _Route.ask:
-            next_state = "ask_user"
-            signal = "needs_input"
-        else:
-            next_state = "ask_user"
-            signal = "complete"
+        signal = "needs_input" if data.route == _Route.ask else "complete"
 
         return StateOutput(
             content=user_text,
             completion_signal=signal,
-            structured_data={"next_state": next_state, "route": data.route.value},
+            structured_data={"route": data.route.value},
         )
