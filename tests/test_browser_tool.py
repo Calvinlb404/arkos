@@ -20,25 +20,24 @@ import pytest
 
 
 def _install_fake_browser_use(monkeypatch, run_side_effect=None, captured_cdp=None):
-    """Install a fake `browser_use` and `langchain_openai` module so the lazy
-    import inside run_browser_task succeeds without the real packages.
+    """Install a fake `browser_use` module so the lazy import inside
+    run_browser_task succeeds without the real package.
+
+    Matches the browser-use 0.12 surface: top-level Agent, Browser (an alias
+    for BrowserSession that takes cdp_url directly), and ChatOpenAI.
 
     `run_side_effect` is awaited as the result of Agent.run(). If a list is
     passed, each call pops the next item.
     """
     fake_browser_use = types.ModuleType("browser_use")
-    fake_langchain = types.ModuleType("langchain_openai")
-
-    class FakeBrowserConfig:
-        def __init__(self, cdp_url=None):
-            self.cdp_url = cdp_url
-            if captured_cdp is not None:
-                captured_cdp.append(cdp_url)
 
     class FakeBrowser:
-        def __init__(self, config):
-            self.config = config
+        def __init__(self, cdp_url=None, is_local=True):
+            self.cdp_url = cdp_url
+            self.is_local = is_local
             self.closed = False
+            if captured_cdp is not None:
+                captured_cdp.append(cdp_url)
 
         async def close(self):
             self.closed = True
@@ -70,11 +69,9 @@ def _install_fake_browser_use(monkeypatch, run_side_effect=None, captured_cdp=No
 
     fake_browser_use.Agent = FakeAgent
     fake_browser_use.Browser = FakeBrowser
-    fake_browser_use.BrowserConfig = FakeBrowserConfig
-    fake_langchain.ChatOpenAI = FakeChatOpenAI
+    fake_browser_use.ChatOpenAI = FakeChatOpenAI
 
     monkeypatch.setitem(sys.modules, "browser_use", fake_browser_use)
-    monkeypatch.setitem(sys.modules, "langchain_openai", fake_langchain)
 
 
 # ---------------------------------------------------------------------------
@@ -110,15 +107,10 @@ async def test_browser_tool_routes_llm_through_sglang(monkeypatch):
     captured_llm = {}
 
     fake_browser_use = types.ModuleType("browser_use")
-    fake_langchain = types.ModuleType("langchain_openai")
-
-    class FakeBrowserConfig:
-        def __init__(self, cdp_url=None):
-            self.cdp_url = cdp_url
 
     class FakeBrowser:
-        def __init__(self, config):
-            self.config = config
+        def __init__(self, cdp_url=None, is_local=True):
+            self.cdp_url = cdp_url
 
         async def close(self):
             pass
@@ -142,10 +134,8 @@ async def test_browser_tool_routes_llm_through_sglang(monkeypatch):
 
     fake_browser_use.Agent = FakeAgent
     fake_browser_use.Browser = FakeBrowser
-    fake_browser_use.BrowserConfig = FakeBrowserConfig
-    fake_langchain.ChatOpenAI = FakeChatOpenAI
+    fake_browser_use.ChatOpenAI = FakeChatOpenAI
     monkeypatch.setitem(sys.modules, "browser_use", fake_browser_use)
-    monkeypatch.setitem(sys.modules, "langchain_openai", fake_langchain)
 
     monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
     monkeypatch.setenv("SGLANG_URL", "http://sglang:30000")

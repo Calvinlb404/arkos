@@ -45,15 +45,15 @@ def _stream_enabled() -> bool:
 def _find_agent_page(agent: Any) -> Any | None:
     """Best-effort lookup of the playwright Page browser-use is driving.
 
-    browser-use has shuffled this attribute around across versions, so we try
-    a few known paths and silently give up if none work. Failure here means
-    no screencast; the agent itself still runs normally.
+    browser-use 0.12 makes Browser an alias for BrowserSession, and the
+    current page is reachable as `agent.browser_session.current_page` or via
+    the underlying playwright context. Older shapes are tried as a fallback.
     """
     paths = (
-        lambda: agent.browser_context.session.current_page,
-        lambda: agent.browser_context.session.context.pages[-1],
-        lambda: agent.browser_context.current_page,
-        lambda: agent.browser.playwright_browser.contexts[0].pages[-1],
+        lambda: agent.browser_session.current_page,
+        lambda: agent.browser_session.browser_context.pages[-1],
+        lambda: agent.browser.current_page,
+        lambda: agent.browser.browser_context.pages[-1],
     )
     for resolve in paths:
         try:
@@ -140,8 +140,7 @@ async def run_browser_task(user_id: str, task: str) -> str:
 
     # Lazy imports so the rest of arkos can boot without browser-use installed.
     try:
-        from browser_use import Agent, Browser, BrowserConfig
-        from langchain_openai import ChatOpenAI
+        from browser_use import Agent, Browser, ChatOpenAI
     except ImportError as e:
         raise BrowserToolError(f"browser-use is not installed in this environment: {e}") from e
 
@@ -157,7 +156,7 @@ async def run_browser_task(user_id: str, task: str) -> str:
         llm_base_url,
         llm_model,
     )
-    browser = Browser(config=BrowserConfig(cdp_url=cdp_url))
+    browser = Browser(cdp_url=cdp_url, is_local=False)
     agent = Agent(
         task=task,
         llm=ChatOpenAI(model=llm_model, base_url=llm_base_url, api_key=llm_api_key),
