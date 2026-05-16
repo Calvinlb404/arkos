@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from agent_module.agent import Agent
+from base_module.browser_routes import router as browser_router
 from base_module.tasks import router as tasks_router
 from base_module.users import router as users_router
 from config_module.loader import config
@@ -37,6 +38,7 @@ app.add_middleware(
 
 app.include_router(users_router)
 app.include_router(tasks_router)
+app.include_router(browser_router)
 
 # Serve the ark frontend at /app/ if the folder exists
 _FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
