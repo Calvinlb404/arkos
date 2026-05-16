@@ -1,3 +1,56 @@
+/* live screencast pane — fades in when buddy starts a browser task */
+.browser-pane {
+  position: fixed;
+  top: 64px;
+  right: 16px;
+  width: 360px;
+  background: var(--bg-soft);
+  border: 1px solid var(--bg-line);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  z-index: 30;
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+.browser-pane.live {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.browser-pane-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+  border-bottom: 1px solid var(--bg-line);
+}
+.browser-pane-header .dot.live {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--err);
+  box-shadow: 0 0 0 0 rgba(176, 30, 30, 0.6);
+  animation: browser-pane-pulse 1.6s ease-in-out infinite;
+}
+@keyframes browser-pane-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(176, 30, 30, 0.6); }
+  50%      { box-shadow: 0 0 0 4px rgba(176, 30, 30, 0); }
+}
+.browser-pane img {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #000;
+}
+
 :root {
   --fg: #0a0a0a;
   --fg-soft: #3a3a3a;
