@@ -246,3 +246,164 @@ async def test_handler_rejects_missing_task():
 
     with pytest.raises(BrowserToolError, match="task"):
         await _handler({}, "user_1")
+
+
+# ---------------------------------------------------------------------------
+# Screencast wiring
+# ---------------------------------------------------------------------------
+
+
+class _FakeCDP:
+    """Minimal stand-in for a playwright CDPSession that records sent commands
+    and lets a test fire synthetic Page.screencastFrame events at it."""
+
+    def __init__(self):
+        self.sent: list[tuple[str, dict]] = []
+        self._handlers: dict[str, list] = {}
+
+    def on(self, event, handler):
+        self._handlers.setdefault(event, []).append(handler)
+
+    async def send(self, method, params=None):
+        self.sent.append((method, params or {}))
+
+    def fire(self, event, params):
+        for h in self._handlers.get(event, []):
+            h(params)
+
+
+class _FakeContext:
+    def __init__(self, cdp):
+        self._cdp = cdp
+
+    async def new_cdp_session(self, page):
+        return self._cdp
+
+
+class _FakePage:
+    def __init__(self, cdp):
+        self.context = _FakeContext(cdp)
+
+
+@pytest.mark.asyncio
+async def test_browser_tool_starts_and_ends_screencast_session(monkeypatch):
+    """Around agent.run(), the broker must see exactly one started/ended pair
+    and any CDP frames must be forwarded to push_frame."""
+    import tool_module.browser_tool as bt
+
+    cdp = _FakeCDP()
+    page = _FakePage(cdp)
+
+    captured = []
+
+    class FakeBroker:
+        def start_session(self, user_id):
+            captured.append(("start", user_id))
+
+        def push_frame(self, user_id, jpeg_b64):
+            captured.append(("frame", user_id, jpeg_b64))
+
+        def end_session(self, user_id):
+            captured.append(("end", user_id))
+
+    monkeypatch.setattr(bt, "_stream_broker", FakeBroker())
+    monkeypatch.setattr(bt, "_find_agent_page", lambda agent: page)
+
+    _install_fake_browser_use(monkeypatch, run_side_effect="done")
+    monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
+
+    # Drive a frame through during agent.run(): patch agent.run on the fake.
+    import sys as _sys
+
+    real_browser_use = _sys.modules["browser_use"]
+
+    class FakeAgentWithFrame:
+        def __init__(self, task, llm, browser):
+            self.browser = browser
+
+        async def run(self):
+            # Give the screencast task time to attach, then fire a frame.
+            for _ in range(20):
+                if (
+                    "Page.startScreencast",
+                    {
+                        "format": "jpeg",
+                        "quality": 60,
+                        "maxWidth": 1024,
+                        "maxHeight": 768,
+                        "everyNthFrame": 1,
+                    },
+                ) in cdp.sent:
+                    break
+                await asyncio.sleep(0.01)
+            cdp.fire("Page.screencastFrame", {"data": "ZZZZ", "sessionId": 1})
+            await asyncio.sleep(0.01)
+
+            class _H:
+                def final_result(self_inner):
+                    return "done"
+
+            return _H()
+
+    real_browser_use.Agent = FakeAgentWithFrame
+
+    result = await bt.run_browser_task("user_42", "do a thing")
+
+    assert result == "done"
+    # Must have exactly one start/end and at least one frame in between.
+    assert ("start", "user_42") in captured
+    assert ("end", "user_42") in captured
+    assert ("frame", "user_42", "ZZZZ") in captured
+    # Acks should have been sent for any fired frames.
+    assert ("Page.screencastFrameAck", {"sessionId": 1}) in cdp.sent
+    # Stop must have been issued on teardown.
+    assert ("Page.stopScreencast", {}) in cdp.sent
+
+
+@pytest.mark.asyncio
+async def test_browser_tool_screencast_disabled_via_env(monkeypatch):
+    """BROWSER_STREAM_ENABLED=0 should skip the broker entirely."""
+    import tool_module.browser_tool as bt
+
+    touched = []
+
+    class TouchyBroker:
+        def start_session(self, user_id):
+            touched.append("start")
+
+        def push_frame(self, user_id, jpeg_b64):
+            touched.append("frame")
+
+        def end_session(self, user_id):
+            touched.append("end")
+
+    monkeypatch.setattr(bt, "_stream_broker", TouchyBroker())
+    _install_fake_browser_use(monkeypatch, run_side_effect="done")
+    monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
+    monkeypatch.setenv("BROWSER_STREAM_ENABLED", "0")
+
+    result = await bt.run_browser_task("user_1", "task")
+
+    assert result == "done"
+    assert touched == []
+
+
+@pytest.mark.asyncio
+async def test_browser_tool_screencast_failure_does_not_break_agent(monkeypatch):
+    """If we cannot find a page, the agent must still complete and return."""
+    import tool_module.browser_tool as bt
+
+    monkeypatch.setattr(bt, "_find_agent_page", lambda agent: None)
+    _install_fake_browser_use(monkeypatch, run_side_effect="ok")
+    monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
+
+    # Speed up the page-discovery loop in the test
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(seconds):
+        await real_sleep(0)
+
+    monkeypatch.setattr(bt.asyncio, "sleep", fast_sleep)
+
+    result = await bt.run_browser_task("user_1", "task")
+    assert result == "ok"
