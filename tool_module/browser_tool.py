@@ -19,6 +19,9 @@ Configuration (env):
   OPENAI_API_KEY     forwarded as the bearer token; SGLang ignores it but the
                      OpenAI client requires something. Defaults to "sk-dummy".
   BROWSER_STREAM_ENABLED  "0" to disable the screencast entirely (default on).
+  BROWSER_USE_MAX_STEPS    hard cap on browser-use agent steps (default 25).
+  BROWSER_USE_MAX_SECONDS  wall-clock timeout for one task in seconds
+                           (default 180). Beats infinite reCAPTCHA loops.
 """
 
 from __future__ import annotations
@@ -156,6 +159,9 @@ async def run_browser_task(user_id: str, task: str) -> str:
         llm_base_url,
         llm_model,
     )
+    max_steps = int(os.environ.get("BROWSER_USE_MAX_STEPS", "25"))
+    max_seconds = float(os.environ.get("BROWSER_USE_MAX_SECONDS", "180"))
+
     browser = Browser(cdp_url=cdp_url, is_local=False)
     agent = Agent(
         task=task,
@@ -168,8 +174,19 @@ async def run_browser_task(user_id: str, task: str) -> str:
         _stream_broker.start_session(user_id)
         screencast_task = asyncio.create_task(_run_screencast(agent, user_id))
 
+    async def _run_with_step_cap():
+        try:
+            return await agent.run(max_steps=max_steps)
+        except TypeError:
+            # Older/newer browser-use versions may not accept max_steps; fall
+            # back to the wall-clock timeout alone.
+            return await agent.run()
+
+    history = None
     try:
-        history = await agent.run()
+        history = await asyncio.wait_for(_run_with_step_cap(), timeout=max_seconds)
+    except TimeoutError as e:
+        raise BrowserToolError(f"browser task exceeded the {max_seconds:.0f}s wall-clock limit; aborting") from e
     except Exception as e:
         raise BrowserToolError(f"browser task failed: {e}") from e
     finally:

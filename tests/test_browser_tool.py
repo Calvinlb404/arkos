@@ -55,7 +55,7 @@ def _install_fake_browser_use(monkeypatch, run_side_effect=None, captured_cdp=No
             self.llm = llm
             self.browser = browser
 
-        async def run(self):
+        async def run(self, max_steps=None):
             value = run_side_effect.pop(0) if isinstance(run_side_effect, list) else run_side_effect
             if isinstance(value, Exception):
                 raise value
@@ -123,7 +123,7 @@ async def test_browser_tool_routes_llm_through_sglang(monkeypatch):
         def __init__(self, task, llm, browser):
             self.llm = llm
 
-        async def run(self):
+        async def run(self, max_steps=None):
             return FakeHistory()
 
     class FakeChatOpenAI:
@@ -397,3 +397,91 @@ async def test_browser_tool_screencast_failure_does_not_break_agent(monkeypatch)
 
     result = await bt.run_browser_task("user_1", "task")
     assert result == "ok"
+
+
+@pytest.mark.asyncio
+async def test_browser_tool_wall_clock_timeout(monkeypatch):
+    """A runaway agent must be aborted after BROWSER_USE_MAX_SECONDS."""
+    from tool_module.browser_tool import BrowserToolError
+
+    # Install a fake browser_use whose Agent.run hangs forever.
+    fake_browser_use = types.ModuleType("browser_use")
+
+    class FakeBrowser:
+        def __init__(self, cdp_url=None, is_local=True):
+            pass
+
+        async def close(self):
+            pass
+
+    class FakeAgent:
+        def __init__(self, task, llm, browser):
+            pass
+
+        async def run(self, max_steps=None):
+            await asyncio.sleep(10)  # longer than the test timeout below
+            return None
+
+    class FakeChatOpenAI:
+        def __init__(self, model, base_url=None, api_key=None):
+            pass
+
+    fake_browser_use.Agent = FakeAgent
+    fake_browser_use.Browser = FakeBrowser
+    fake_browser_use.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "browser_use", fake_browser_use)
+
+    monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
+    monkeypatch.setenv("BROWSER_USE_MAX_SECONDS", "0.1")
+    monkeypatch.setenv("BROWSER_STREAM_ENABLED", "0")
+
+    from tool_module.browser_tool import run_browser_task
+
+    with pytest.raises(BrowserToolError, match="wall-clock"):
+        await run_browser_task("user_1", "task")
+
+
+@pytest.mark.asyncio
+async def test_browser_tool_passes_max_steps_when_supported(monkeypatch):
+    """When the Agent.run accepts max_steps, run_browser_task should pass it."""
+    captured = {}
+
+    fake_browser_use = types.ModuleType("browser_use")
+
+    class FakeBrowser:
+        def __init__(self, cdp_url=None, is_local=True):
+            pass
+
+        async def close(self):
+            pass
+
+    class FakeHistory:
+        def final_result(self):
+            return "done"
+
+    class FakeAgent:
+        def __init__(self, task, llm, browser):
+            pass
+
+        async def run(self, max_steps=None):
+            captured["max_steps"] = max_steps
+            return FakeHistory()
+
+    class FakeChatOpenAI:
+        def __init__(self, model, base_url=None, api_key=None):
+            pass
+
+    fake_browser_use.Agent = FakeAgent
+    fake_browser_use.Browser = FakeBrowser
+    fake_browser_use.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "browser_use", fake_browser_use)
+
+    monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
+    monkeypatch.setenv("BROWSER_USE_MAX_STEPS", "7")
+    monkeypatch.setenv("BROWSER_STREAM_ENABLED", "0")
+
+    from tool_module.browser_tool import run_browser_task
+
+    result = await run_browser_task("user_1", "task")
+    assert result == "done"
+    assert captured["max_steps"] == 7
