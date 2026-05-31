@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import uuid
+from datetime import datetime
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -84,7 +85,9 @@ def _make_agent(user_id: str) -> Agent:
         llm=llm,
         tool_manager=tool_manager,
     )
-    ag.system_prompt = _system_prompt
+    now = datetime.now().astimezone()
+    date_line = f"Current date and time: {now.strftime('%A, %B %d, %Y %H:%M %Z')}"
+    ag.system_prompt = date_line + "\n\n" + _system_prompt if _system_prompt else date_line
     ag.available_tools = _available_tools
     return ag
 
@@ -503,7 +506,7 @@ async def chat_completions(request: Request):
     req_agent = _make_agent(effective_user_id)
 
     context_msgs = []
-    context_msgs.append(SystemMessage(content=_system_prompt))
+    context_msgs.append(SystemMessage(content=req_agent.system_prompt))
 
     # Convert OAI messages into internal message objects
     for msg in messages:
