@@ -1,9 +1,12 @@
 import json
+import logging
 import os
 import sys
 import time
 import uuid
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -43,9 +46,9 @@ app.include_router(tasks_router)
 _FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
 if os.path.isdir(_FRONTEND_DIR):
     app.mount("/app", StaticFiles(directory=_FRONTEND_DIR, html=True), name="frontend")
-    print(f"[ark] serving frontend from {_FRONTEND_DIR} at /app/")
+    logger.info("[ark] serving frontend from %s at /app/", _FRONTEND_DIR)
 else:
-    print(f"[ark] no frontend folder at {_FRONTEND_DIR}; /app route disabled")
+    logger.info("[ark] no frontend folder at %s; /app route disabled", _FRONTEND_DIR)
 
 
 # Shared singletons (no per-user state)
@@ -103,9 +106,9 @@ tool_manager = (
 )
 if tool_manager is None:
     if not smithery_config.get("api_key"):
-        print("[ark] SMITHERY_API_KEY missing; MCP tool manager disabled")
+        logger.info("[ark] SMITHERY_API_KEY missing; MCP tool manager disabled")
     elif not mcp_config:
-        print("[ark] no mcp_servers configured; tool manager disabled")
+        logger.info("[ark] no mcp_servers configured; tool manager disabled")
 
 
 def format_tools_for_system_prompt(tools_by_server: dict, deferred: list[dict] | None = None) -> str:
@@ -192,6 +195,11 @@ def _list_deferred_services() -> list[dict]:
 async def startup():
     """Initialize MCP servers and build the agent's system prompt with available tools."""
     global _system_prompt, _available_tools
+
+    # Fail fast if essential config is missing rather than surfacing cryptic
+    # None errors mid-request.
+    config.validate_required(["database.url", "llm.base_url", "llm.model_name"])
+
     base_system_prompt = (config.get("app.system_prompt") or "").strip()
 
     if tool_manager:
@@ -203,14 +211,14 @@ async def startup():
         shared_servers = [s for s, tools in _available_tools.items() if tools]
         deferred = _list_deferred_services()
 
-        print(
-            f"[ark] MCP init: {len(shared_servers)} shared server(s) connected "
-            f"({shared_tools} tool(s)); {len(deferred)} per-user service(s) deferred"
+        logger.info(
+            "[ark] MCP init: %d shared server(s) connected (%d tool(s)); %d per-user service(s) deferred",
+            len(shared_servers), shared_tools, len(deferred),
         )
         if shared_servers:
-            print(f"[ark]   shared: {', '.join(shared_servers)}")
+            logger.info("[ark]   shared: %s", ", ".join(shared_servers))
         if deferred:
-            print(f"[ark]   deferred (needs user OAuth): {', '.join(s['service'] for s in deferred)}")
+            logger.info("[ark]   deferred (needs user OAuth): %s", ", ".join(s["service"] for s in deferred))
 
         tool_prompt = format_tools_for_system_prompt(_available_tools, deferred=deferred)
         _system_prompt = base_system_prompt + "\n\n" + tool_prompt if base_system_prompt else tool_prompt
@@ -223,9 +231,9 @@ async def startup():
 
         resumed = await sweep_orphans()
         if resumed:
-            print(f"[ark] resumed {resumed} orphan task(s) after restart")
+            logger.info("[ark] resumed %d orphan task(s) after restart", resumed)
     except Exception as e:
-        print(f"[ark] task orphan sweep failed: {e}")
+        logger.warning("[ark] task orphan sweep failed: %s", e)
 
 
 @app.get("/services")
@@ -432,30 +440,28 @@ async def oauth_callback(service: str, request: Request):
 @app.get("/health")
 async def health_check():
     """Health check endpoint to verify server and all dependencies."""
-    import requests
+    import psycopg2
+    import httpx
 
     services = {}
 
-    # Check SGLang (LLM inference)
-    try:
-        resp = requests.get("http://localhost:30000/v1/models", timeout=2)
-        services["sglang"] = "running" if resp.status_code == 200 else "error"
-    except Exception:
-        services["sglang"] = "not_running"
+    # Check SGLang and TEI with async HTTP so we don't block the event loop.
+    async with httpx.AsyncClient(timeout=2.0) as client:
+        for name, url in [("sglang", "http://localhost:30000/v1/models"),
+                          ("tei", "http://localhost:4444/health")]:
+            try:
+                resp = await client.get(url)
+                services[name] = "running" if resp.status_code == 200 else "error"
+            except Exception:
+                services[name] = "not_running"
 
-    # Check TEI (text embeddings)
+    # Check Postgres -- use try/finally to guarantee connection close.
     try:
-        resp = requests.get("http://localhost:4444/health", timeout=2)
-        services["tei"] = "running" if resp.status_code == 200 else "error"
-    except Exception:
-        services["tei"] = "not_running"
-
-    # Check Postgres
-    try:
-        import psycopg2
-
         conn = psycopg2.connect(config.get("database.url"), connect_timeout=2)
-        conn.close()
+        try:
+            conn.close()
+        finally:
+            pass
         services["postgres"] = "running"
     except Exception:
         services["postgres"] = "not_running"

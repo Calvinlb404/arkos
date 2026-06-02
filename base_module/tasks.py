@@ -125,6 +125,20 @@ def _connect():
     return psycopg2.connect(config.get("database.url"))
 
 
+def _promote_to_running(task_id: str) -> None:
+    """Move a task from pending to running after spawn() succeeds."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE tasks SET status = 'running' WHERE task_id = %s",
+                (task_id,),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+
 def _row_to_response(row: dict[str, Any]) -> TaskResponse:
     payload = row["context_payload"] or {}
     if isinstance(payload, str):
@@ -186,11 +200,13 @@ async def create_task(body: TaskCreate, current: dict = CurrentUser) -> TaskResp
     conn = _connect()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Insert as 'pending' so a failed spawn never leaves a stuck 'running' row.
+            # The row is promoted to 'running' only after spawn() succeeds below.
             cur.execute(
                 """
                 INSERT INTO tasks (user_id, status, required_tools, context_payload,
                                    session_id, agent_kind)
-                VALUES (%s, 'running', %s, %s, %s, 'executor')
+                VALUES (%s, 'pending', %s, %s, %s, 'executor')
                 RETURNING task_id, user_id, status, required_tools, context_payload,
                           session_id, agent_kind, created_at, updated_at
                 """,
@@ -203,17 +219,17 @@ async def create_task(body: TaskCreate, current: dict = CurrentUser) -> TaskResp
 
     resp = _row_to_response(row)
 
-    # Fire and forget: the runner will log events + update status in the DB.
     try:
         task_runner.spawn(resp.task_id)
     except Exception as e:
-        # If spawning fails, surface it but keep the row so the user can retry.
         from base_module.task_store import log_event, mark_task_failed
 
         log_event(resp.task_id, "error", f"spawn failed: {e}")
         mark_task_failed(resp.task_id, str(e))
         raise HTTPException(500, f"task row created but runner failed to start: {e}") from e
 
+    # Promote to 'running' now that spawn succeeded.
+    _promote_to_running(resp.task_id)
     return resp
 
 
