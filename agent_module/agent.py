@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, ValidationError, create_model
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from memory_module.memory import Memory
 from model_module.errors import ModelError
+from state_module.core.base_state import TerminalReason
 
 # Assuming ArkModelLink.generate_response is actually ArkModelLink.agenerate_response
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage
@@ -71,6 +72,7 @@ class Agent:
         self.plan_steps: list[str] = []
         self.step_idx: int = 0
         self.max_iter: int = MAX_ITER
+        self.terminal_reason: TerminalReason | None = None
 
     # def bind_tool(self, tool):
     #
@@ -200,6 +202,39 @@ class Agent:
 
         return parsed.next_state.value
 
+    async def _run_state(self, context: list) -> tuple[StateOutput | None, str | None]:
+        """
+        Run the current state once and classify the result.
+
+        Returns (output, retry_signal) where:
+        - output is a StateOutput on success or a terminal error.
+        - retry_signal is "retry" when a transient ModelError should cause
+          the loop to re-run the same state (bounded by max_iter).
+        - (error_output, None) when the failure is permanent and should be
+          routed to agent_reply with completion_signal="error".
+        """
+        try:
+            return await self.current_state.run(context, self), None
+        except ModelError as e:
+            if e.retryable:
+                logger.warning("transient model error in state %s: %s", self.current_state.name, e)
+                return None, "retry"
+            logger.error("terminal model error in state %s: %s", self.current_state.name, e)
+            return StateOutput(
+                content="I could not reach the model. Please try again.",
+                completion_signal="error",
+                error_detail=str(e),
+                structured_data={"route": "ask"},
+            ), None
+        except Exception as e:
+            logger.error("state %s raised unexpected error: %s", self.current_state.name, e)
+            return StateOutput(
+                content="An internal error occurred.",
+                completion_signal="error",
+                error_detail=str(e),
+                structured_data={"route": "ask"},
+            ), None
+
     def render_tool_result(self, tool_result: Any) -> str:
         """
         Convert a tool result into a string safe to place in the context window.
@@ -263,35 +298,38 @@ class Agent:
         print("agent.py received message")
 
         self.last_state_output = None
+        self.terminal_reason = None
         retry_count = 0
-        print("agent.py CURR STATE: ", self.current_state)
-        print("agent.py IS TERMINAL?:", self.current_state.is_terminal)
+
+        logger.debug("step start: state=%s", self.current_state.name)
 
         while True:
-            loop_start = time.time()
-            print(f"Inner loop #{retry_count + 1}")
-
             if retry_count > self.max_iter:
-                print("MAX ITER REACHED")
+                logger.warning("max iterations (%d) reached", self.max_iter)
+                self.terminal_reason = TerminalReason.max_steps
                 break
             retry_count += 1
 
-            t0 = time.time()
             context = await self.get_context()
-            print(f"[TIMING] get_context: {time.time() - t0:.3f}s")
+            update, retry_signal = await self._run_state(context)
 
-            t0 = time.time()
-            update = await self.current_state.run(context, self)
-            print(f"[TIMING] state.run: {time.time() - t0:.3f}s")
-            print(f"[TIMING] loop total: {time.time() - loop_start:.3f}s")
+            if retry_signal == "retry":
+                continue
+
             if update:
-                assert isinstance(update, StateOutput), "State's output was not instance StateOutput"
+                assert isinstance(update, StateOutput), "State output was not a StateOutput instance"
                 self.last_state_output = update
                 if update.content:
                     await self.add_context([AIMessage(content=update.content)])
 
+            if update and update.completion_signal == "error" and not self.current_state.is_terminal:
+                # Route errors back to the reply state rather than crashing.
+                self.current_state = self.flow.get_state("agent_reply")
+                self.terminal_reason = TerminalReason.model_error
+                break
+
             if self.current_state.is_terminal:
-                print("REACHED TERMINAL")
+                self.terminal_reason = TerminalReason.completed
                 break
 
             messages_list = await self.memory.retrieve_short_memory(5)
@@ -310,14 +348,17 @@ class Agent:
                     next_state_name = await self.choose_transition(transition_dict, messages_list)
 
                 self.current_state = self.flow.get_state(next_state_name)
-                print("agent.py CURR STATE: ", self.current_state)
+                logger.debug("transition -> %s", self.current_state.name)
 
             else:
-                print("REACHED NO NEXT STATE")
-                break  # No transition ready, exit gracefully
+                self.terminal_reason = TerminalReason.needs_input
+                break
 
-        print(f"[TIMING] step total: {time.time() - step_start:.3f}s")
-        print("LAST_STATE_OUTPUT", self.last_state_output)
+        logger.debug(
+            "step done: reason=%s elapsed=%.3fs",
+            self.terminal_reason,
+            time.time() - step_start,
+        )
         self.current_state = self.flow.get_initial_state()
         return self.last_state_output
 
@@ -329,58 +370,46 @@ class Agent:
             str: Characters/chunks from each state's output
         """
         self.current_user_id = user_id
+        self.terminal_reason = None
         await self.add_context(messages)
-
-        print("agent.py [STREAM] received message")
-        print("agent.py [STREAM] CURR STATE:", self.current_state)
-        print("agent.py [STREAM] IS TERMINAL?:", self.current_state.is_terminal)
 
         retry_count = 0
 
         while True:
-            print(f"agent.py [STREAM] Inner loop - State: {self.current_state.name}")
-
             if retry_count > self.max_iter:
-                print("agent.py [STREAM] MAX ITER REACHED")
+                logger.warning("step_stream: max iterations (%d) reached", self.max_iter)
+                self.terminal_reason = TerminalReason.max_steps
                 yield "\n[Max iterations reached]"
                 break
             retry_count += 1
 
             context = await self.get_context()
+            update, retry_signal = await self._run_state(context)
 
-            # Run the state normally (same as non-streaming step)
-            try:
-                update = await self.current_state.run(context, self)
-                print(f"agent.py [STREAM] State returned: {type(update).__name__}")
-            except Exception as e:
-                print(f"agent.py [STREAM] State error: {e}")
-                update = StateOutput(
-                    content=f"Error: {str(e)[:200]}",
-                    completion_signal="error",
-                    error_detail=str(e),
-                )
-                self.current_state = self.flow.get_state("agent_reply")
+            if retry_signal == "retry":
+                continue
 
             if update:
-                assert isinstance(update, StateOutput), "State's output was not instance StateOutput"
+                assert isinstance(update, StateOutput), "State output was not a StateOutput instance"
                 self.last_state_output = update
                 if update.content:
                     await self.add_context([AIMessage(content=update.content)])
-                    print(f"agent.py [STREAM] Streaming {len(update.content)} chars")
                     for char in update.content:
                         yield char
 
-            # Check terminal
-            if self.current_state.is_terminal:
-                print("agent.py [STREAM] REACHED TERMINAL")
+            if update and update.completion_signal == "error" and not self.current_state.is_terminal:
+                self.current_state = self.flow.get_state("agent_reply")
+                self.terminal_reason = TerminalReason.model_error
                 break
 
-            # Handle state transition (same logic as non-streaming step)
+            if self.current_state.is_terminal:
+                self.terminal_reason = TerminalReason.completed
+                break
+
             messages_list = await self.memory.retrieve_short_memory(5)
             if self.current_state.check_transition_ready(messages_list):
                 transition_dict = self.flow.get_transitions(self.current_state, messages_list)
                 transition_names = transition_dict["tt"]
-                print(f"agent.py [STREAM] Transitions: {transition_names}")
 
                 router = self.flow.get_router(self.current_state)
                 if router and update:
@@ -390,17 +419,14 @@ class Agent:
                 else:
                     next_state_name = await self.choose_transition(transition_dict, messages_list)
 
-                print(f"agent.py [STREAM] -> {next_state_name}")
                 self.current_state = self.flow.get_state(next_state_name)
 
-                # Separator between states (if continuing)
                 if not self.current_state.is_terminal:
                     yield "\n\n"
             else:
-                print("agent.py [STREAM] No transition ready")
+                self.terminal_reason = TerminalReason.needs_input
                 break
 
-        print("agent.py [STREAM] Complete")
         self.current_state = self.flow.get_initial_state()
 
 

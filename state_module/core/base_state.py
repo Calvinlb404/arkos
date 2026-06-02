@@ -1,6 +1,21 @@
+from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+
+class TerminalReason(str, Enum):
+    """
+    Why the agent loop stopped.
+
+    Returned alongside the last StateOutput so callers (app.py, task_runner.py)
+    can react correctly rather than guessing from content.
+    """
+
+    completed = "completed"
+    max_steps = "max_steps"
+    model_error = "model_error"
+    needs_input = "needs_input"
 
 
 class StateOutput(BaseModel):

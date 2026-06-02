@@ -7,6 +7,8 @@ import pytest
 
 from agent_module.agent import MAX_ITER, Agent
 from model_module.ArkModelNew import AIMessage, SystemMessage, UserMessage
+from model_module.errors import ModelError
+from state_module.core.base_state import StateOutput, TerminalReason
 
 
 @pytest.fixture
@@ -203,6 +205,83 @@ class TestChooseTransition:
         }
         result = await agent.choose_transition(transitions, [UserMessage(content="search for something")])
         assert result == "tool_use"
+
+
+class TestRunState:
+    @pytest.mark.asyncio
+    async def test_success_returns_output_no_signal(self, agent):
+        expected = StateOutput(content="ok", completion_signal="complete")
+        agent.current_state.run = AsyncMock(return_value=expected)
+        output, signal = await agent._run_state([])
+        assert output is expected
+        assert signal is None
+
+    @pytest.mark.asyncio
+    async def test_retryable_model_error_returns_retry_signal(self, agent):
+        agent.current_state.run = AsyncMock(side_effect=ModelError("timeout", retryable=True))
+        output, signal = await agent._run_state([])
+        assert output is None
+        assert signal == "retry"
+
+    @pytest.mark.asyncio
+    async def test_terminal_model_error_returns_error_output(self, agent):
+        agent.current_state.run = AsyncMock(side_effect=ModelError("auth", retryable=False))
+        output, signal = await agent._run_state([])
+        assert output is not None
+        assert output.completion_signal == "error"
+        assert signal is None
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_returns_error_output(self, agent):
+        agent.current_state.run = AsyncMock(side_effect=RuntimeError("boom"))
+        output, signal = await agent._run_state([])
+        assert output is not None
+        assert output.completion_signal == "error"
+        assert signal is None
+
+
+class TestTerminalReason:
+    @pytest.mark.asyncio
+    async def test_completed_reason_on_terminal_state(self, agent, mock_deps):
+        flow, memory, llm, _ = mock_deps
+        terminal_state = MagicMock()
+        terminal_state.is_terminal = True
+        terminal_state.name = "done"
+        terminal_state.run = AsyncMock(return_value=StateOutput(content="done", completion_signal="complete"))
+        terminal_state.check_transition_ready.return_value = False
+
+        agent.current_state = terminal_state
+        memory.add_memory = AsyncMock()
+        memory.retrieve_short_memory = AsyncMock(return_value=[])
+        memory.retrieve_long_memory = AsyncMock(return_value=SystemMessage(content=""))
+        flow.get_initial_state.return_value = terminal_state
+
+        await agent.step([UserMessage(content="hi")], user_id="u1")
+        assert agent.terminal_reason == TerminalReason.completed
+
+    @pytest.mark.asyncio
+    async def test_max_steps_reason_on_iter_overflow(self, agent, mock_deps):
+        flow, memory, llm, _ = mock_deps
+        state = MagicMock()
+        state.is_terminal = False
+        state.name = "looping"
+        state.run = AsyncMock(return_value=StateOutput(content="", completion_signal="incomplete"))
+        # Returning True causes the loop to try to transition, so it will
+        # iterate twice and hit max_iter=0 on the second pass.
+        state.check_transition_ready.return_value = True
+
+        agent.current_state = state
+        agent.max_iter = 0
+        memory.add_memory = AsyncMock()
+        memory.retrieve_short_memory = AsyncMock(return_value=[])
+        memory.retrieve_long_memory = AsyncMock(return_value=SystemMessage(content=""))
+        flow.get_initial_state.return_value = state
+        flow.get_transitions.return_value = {"tt": ["looping"], "td": ["loop"]}
+        flow.get_router.return_value = None
+        flow.get_state.return_value = state
+
+        await agent.step([UserMessage(content="hi")], user_id="u1")
+        assert agent.terminal_reason == TerminalReason.max_steps
 
 
 class TestMaxIter:
