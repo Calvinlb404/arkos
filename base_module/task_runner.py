@@ -87,8 +87,14 @@ async def _run_task_inner(task_id: str) -> None:
     payload = task["context_payload"] or {}
     if isinstance(payload, str):
         import json as _json
+        import logging as _logging
 
-        payload = _json.loads(payload)
+        try:
+            payload = _json.loads(payload)
+        except (ValueError, TypeError) as e:
+            _logging.getLogger(__name__).error("task %s has corrupted context_payload: %s", task_id, e)
+            log_event(task_id, "error", f"corrupted context_payload: {e}")
+            return
 
     plan_text = payload.get("plan") or ""
     plan_steps = payload.get("plan_steps") or []

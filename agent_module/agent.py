@@ -1,23 +1,43 @@
 # agent.py
 
-import json
+import logging
 import os
 import sys
 import time
+from collections.abc import Callable
 from enum import Enum
 from typing import Any
 
-from pydantic import Field, create_model
+from pydantic import BaseModel, Field, ValidationError, create_model
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from memory_module.memory import Memory
+from model_module.errors import ModelError
 
 # Assuming ArkModelLink.generate_response is actually ArkModelLink.agenerate_response
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage
 from state_module.core.base_state import StateOutput
 from state_module.core.state_handler import StateHandler
 
+logger = logging.getLogger(__name__)
+
 MAX_ITER = 10
+
+
+def parse_structured(content: str | None, model_class: type[BaseModel]) -> BaseModel | None:
+    """
+    Parse a JSON string from the model into a Pydantic model.
+
+    Returns None on any parse or validation failure so callers can convert
+    the failure to a typed outcome rather than letting an exception escape.
+    """
+    if not content:
+        return None
+    try:
+        return model_class.model_validate_json(content)
+    except (ValidationError, ValueError):
+        logger.warning("structured output parse failed for %s", model_class.__name__)
+        return None
 
 
 class Agent:
@@ -172,11 +192,25 @@ class Agent:
 
         output = await self.call_llm(context=context_text, json_schema=json_schema)
 
-        structured_output = json.loads(output.content)
+        parsed = parse_structured(output.content, NextStates)
+        if parsed is None:
+            # Fall back to the first listed transition rather than crashing.
+            logger.warning("choose_transition: could not parse model output, using first transition")
+            return transitions_dict["tt"][0]
 
-        next_state_name = structured_output["next_state"]
+        return parsed.next_state.value
 
-        return next_state_name
+    def render_tool_result(self, tool_result: Any) -> str:
+        """
+        Convert a tool result into a string safe to place in the context window.
+
+        This is a placeholder; Task 4 + 7 (context-aware budgeting) will replace
+        the body with a structure-aware head+tail view sized to remaining context.
+        Until then, the full stringified result is used -- same as the previous
+        unbounded behaviour, but now routed through one place so the upgrade is
+        a single edit.
+        """
+        return str(tool_result)
 
     async def add_context(self, messages):
         """

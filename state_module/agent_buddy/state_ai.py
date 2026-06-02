@@ -117,10 +117,12 @@ class StateAI(State):
         try:
             data = ReasonedOutput.model_validate_json(output.content)
         except Exception as e:
-            print(f"[state_ai] schema parse failed: {e}")
+            import logging as _logging
+            _logging.getLogger(__name__).warning("state_ai schema parse failed: %s", e)
             return StateOutput(
-                content=output.content,
-                completion_signal="complete",
+                content=output.content or "",
+                completion_signal="error",
+                error_detail=str(e),
                 structured_data={"route": "ask"},
             )
 

@@ -240,20 +240,22 @@ class TestStateTool:
     async def test_choose_tool(self):
         st = StateTool("t", {})
 
-        # Mock agent with tool_manager
         mock_tool_class = MagicMock()
         mock_tool_class.model_json_schema.return_value = {
             "type": "object",
             "properties": {"tool_name": {"type": "string"}},
         }
+        # parse_structured calls model_validate_json on the class; set up a
+        # return value whose .tool_name.value resolves to the expected string.
+        parsed_mock = MagicMock()
+        parsed_mock.tool_name.value = "search"
+        mock_tool_class.model_validate_json.return_value = parsed_mock
 
         mock_agent = MagicMock()
         mock_agent.create_tool_option_class = AsyncMock(return_value=mock_tool_class)
         mock_agent.call_llm = AsyncMock(
             side_effect=[
-                # First call: choose tool
                 AIMessage(content=json.dumps({"tool_name": "search"})),
-                # Second call: fill args
                 AIMessage(content=json.dumps({"query": "test"})),
             ]
         )
@@ -292,10 +294,11 @@ class TestStateTool:
         )
 
     @pytest.mark.asyncio
-    async def test_run_returns_system_message(self):
+    async def test_run_returns_tool_output(self):
         st = StateTool("t", {})
         mock_agent = MagicMock()
         mock_agent.current_user_id = "user1"
+        mock_agent.render_tool_result.return_value = "42"
 
         with (
             patch.object(st, "_choose_tool", new_callable=AsyncMock) as mock_choose,
@@ -307,28 +310,25 @@ class TestStateTool:
             result = await st.run([], mock_agent)
             assert isinstance(result, StateOutput)
             assert "42" in result.content
+            assert result.completion_signal == "complete"
 
     @pytest.mark.asyncio
-    async def test_run_does_not_truncate_long_tool_result(self):
-        """Regression test for MIT-229: tool results must not be truncated."""
+    async def test_run_no_dead_stash_in_structured_data(self):
+        """tool_result must not appear in structured_data; nothing reads it."""
         st = StateTool("t", {})
         mock_agent = MagicMock()
         mock_agent.current_user_id = "user1"
-
-        long_result = "event_data:" + ("x" * 5000)
+        mock_agent.render_tool_result.return_value = "rendered"
 
         with (
             patch.object(st, "_choose_tool", new_callable=AsyncMock) as mock_choose,
             patch.object(st, "_execute_tool", new_callable=AsyncMock) as mock_exec,
         ):
             mock_choose.return_value = {"tool_name": "list_events", "tool_args": {}}
-            mock_exec.return_value = long_result
+            mock_exec.return_value = "x" * 5000
 
             result = await st.run([], mock_agent)
-            assert isinstance(result, StateOutput)
-            # buddy state_tool returns the raw result; no "tool `name` ->" prefix
-            assert result.content == long_result
-            assert result.structured_data["tool_result"] == long_result
+            assert "tool_result" not in result.structured_data
 
 
 # --- state_registry ---

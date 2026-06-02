@@ -11,13 +11,16 @@ and receives a pre-selected tool via agent.pending_tool.
 
 from __future__ import annotations
 
-import json
+import logging
 
+from agent_module.agent import parse_structured
 from model_module.ArkModelNew import SystemMessage
 from state_module.core.base_state import StateOutput
 from state_module.core.state import State
 from state_module.core.state_registry import register_state
 from tool_module.tool_call import AuthRequiredError
+
+logger = logging.getLogger(__name__)
 
 
 @register_state
@@ -32,7 +35,12 @@ class StateTool(State):
         return True
 
     async def _choose_tool(self, context, agent) -> dict:
-        """Ask the LLM to pick a tool from the available set and fill its args."""
+        """
+        Ask the LLM to pick a tool from the available set and fill its args.
+
+        Raises ValueError if the model output cannot be parsed or names a tool
+        that is not in the registry; run() catches this and returns an error outcome.
+        """
         prompt = "based on the above user request, choose the tool which best satisfies the users request"
         instructions = context + [SystemMessage(content=prompt)]
 
@@ -46,10 +54,17 @@ class StateTool(State):
         }
 
         output = await agent.call_llm(instructions, json_schema)
-        structured_output = json.loads(output.content)
-        tool_name = structured_output["tool_name"]
+        parsed_choice = parse_structured(output.content, tool_option_class)
+        if parsed_choice is None:
+            raise ValueError("could not parse tool choice from model output")
 
-        server_name = agent.tool_manager._tool_registry[tool_name]
+        tool_name = parsed_choice.tool_name.value
+
+        registry = getattr(agent.tool_manager, "_tool_registry", {})
+        if tool_name not in registry:
+            raise ValueError(f"model chose unknown tool: {tool_name!r}")
+
+        server_name = registry[tool_name]
         all_tools = await agent.tool_manager.list_all_tools()
         tool_spec = all_tools[server_name][tool_name]
 
@@ -64,7 +79,14 @@ class StateTool(State):
         args_prompt = f"Fill in the arguments for the tool '{tool_name}' based on the user's request."
         args_context = context + [SystemMessage(content=args_prompt)]
         args_output = await agent.call_llm(args_context, tool_args_schema)
-        tool_args = json.loads(args_output.content)
+
+        # Args schema is dynamic so we accept the raw dict; fall back to empty on bad parse.
+        import json as _json
+        try:
+            tool_args = _json.loads(args_output.content or "{}")
+        except (ValueError, TypeError):
+            logger.warning("could not parse tool args for %s, using empty args", tool_name)
+            tool_args = {}
 
         return {"tool_name": tool_name, "tool_args": tool_args}
 
@@ -80,11 +102,20 @@ class StateTool(State):
             tool_arg_dict = await self._choose_tool(context=context, agent=agent)
             tool_result = await self._execute_tool(tool_call=tool_arg_dict, agent=agent)
 
-            # Single outgoing edge back to agent_reply — no route signal needed.
+            view = agent.render_tool_result(tool_result)
             return StateOutput(
-                content=str(tool_result),
+                content=view,
                 completion_signal="complete",
-                structured_data={"tool_result": tool_result},
+                structured_data={"route": "continue"},
+            )
+
+        except ValueError as e:
+            logger.warning("tool selection failed: %s", e)
+            return StateOutput(
+                content="I could not select an appropriate tool for that request.",
+                completion_signal="error",
+                error_detail=str(e),
+                structured_data={"route": "ask"},
             )
 
         except AuthRequiredError as e:
