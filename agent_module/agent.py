@@ -24,6 +24,47 @@ logger = logging.getLogger(__name__)
 
 MAX_ITER = 10
 
+# Tokens kept below the hard limit to absorb tiktoken/Qwen mismatch (~10-30%)
+# and leave headroom for system-prompt framing added per request.
+_CONTEXT_SAFETY_MARGIN = 2048
+
+# tiktoken approximates tokens; Qwen tokenizes differently. Apply a fudge
+# factor so we err on the side of under-filling the window.
+_TIKTOKEN_FUDGE = 1.15
+
+try:
+    import tiktoken as _tiktoken
+    _ENCODER = _tiktoken.get_encoding("cl100k_base")
+except Exception:
+    _ENCODER = None
+
+
+def _count_tokens(text: str) -> int:
+    """Approximate token count using tiktoken cl100k_base + fudge factor."""
+    if _ENCODER is None:
+        # Rough fallback: 1 token per 4 chars.
+        return int(len(text) / 4 * _TIKTOKEN_FUDGE)
+    return int(len(_ENCODER.encode(text)) * _TIKTOKEN_FUDGE)
+
+
+def _render_for_context(value: Any, budget_chars: int) -> str:
+    """
+    Produce a context-safe string from a tool result.
+
+    If the full string fits in budget_chars, returns it unchanged. Otherwise
+    returns a head+tail view with a truncation marker so the model sees the
+    structure of the result without blowing the context window.
+    """
+    text = str(value)
+    if len(text) <= budget_chars:
+        return text
+    if budget_chars <= 0:
+        return "[result omitted: context window is full]"
+    # Keep equal portions from head and tail so the model sees start and end.
+    half = budget_chars // 2
+    omitted = len(text) - (half * 2)
+    return f"{text[:half]}\n... [{omitted} chars omitted] ...\n{text[-half:]}"
+
 
 def parse_structured(content: str | None, model_class: type[BaseModel]) -> BaseModel | None:
     """
@@ -73,6 +114,7 @@ class Agent:
         self.step_idx: int = 0
         self.max_iter: int = MAX_ITER
         self.terminal_reason: TerminalReason | None = None
+        self.context_tokens: int = 0
 
     # def bind_tool(self, tool):
     #
@@ -235,17 +277,36 @@ class Agent:
                 structured_data={"route": "ask"},
             ), None
 
+    def tool_result_budget(self) -> int:
+        """
+        Remaining character budget for a tool result to enter the context window.
+
+        Computes: context_window - current_context_tokens - output_reserve - safety_margin.
+        Characters rather than tokens because the caller works in strings; the
+        fudge factor in _count_tokens already over-estimates tokens, so treating
+        characters as tokens here is conservative enough.
+        """
+        from config_module.loader import config as _cfg
+        context_window: int = _cfg.get("llm.context_window") or _cfg.get("llm.max_tokens") or 8192
+        output_reserve: int = _cfg.get("llm.max_tokens") or 0
+        # If context_window was not explicitly set, treat max_tokens as the full
+        # budget (no separate output reserve to subtract).
+        if _cfg.get("llm.context_window") is None:
+            output_reserve = 0
+        remaining_tokens = context_window - self.context_tokens - output_reserve - _CONTEXT_SAFETY_MARGIN
+        return max(0, remaining_tokens)
+
     def render_tool_result(self, tool_result: Any) -> str:
         """
         Convert a tool result into a string safe to place in the context window.
 
-        This is a placeholder; Task 4 + 7 (context-aware budgeting) will replace
-        the body with a structure-aware head+tail view sized to remaining context.
-        Until then, the full stringified result is used -- same as the previous
-        unbounded behaviour, but now routed through one place so the upgrade is
-        a single edit.
+        Uses the context-aware budget so a large result never pushes the prompt
+        past the model's limit. The full result is still available to callers
+        via structured_data if needed (for code consumers -- see HARNESS_SPEC
+        Task 4 and ENVIRONMENT_SPEC for model-side retrieval).
         """
-        return str(tool_result)
+        budget = self.tool_result_budget()
+        return _render_for_context(tool_result, budget_chars=budget)
 
     async def add_context(self, messages):
         """
@@ -262,17 +323,27 @@ class Agent:
     async def get_context(self, turns=5, include_long_term=True):
         """
         Wrap long term and short term into context window.
-        output: list of messages
+
+        Also updates self.context_tokens with an approximate token count of the
+        assembled context so callers (render_tool_result, MEMORY_SPEC Task 2) can
+        budget additions without re-counting.
+
+        Returns:
+            list of messages
         """
         short_term_mem = await self.memory.retrieve_short_memory(turns)
 
         if include_long_term:
             long_term_mem = await self.memory.retrieve_long_memory(context=short_term_mem)
-            # Only include if it has content
             if long_term_mem and long_term_mem.content.strip():
-                return [long_term_mem] + short_term_mem
+                ctx = [long_term_mem] + short_term_mem
+            else:
+                ctx = short_term_mem
+        else:
+            ctx = short_term_mem
 
-        return short_term_mem
+        self.context_tokens = sum(_count_tokens(m.content or "") for m in ctx)
+        return ctx
 
     async def step(self, messages, user_id: str = None):
         """

@@ -284,6 +284,35 @@ class TestTerminalReason:
         assert agent.terminal_reason == TerminalReason.max_steps
 
 
+class TestContextBudgeting:
+    def test_render_tool_result_short_result_unchanged(self, agent):
+        agent.context_tokens = 100
+        result = agent.render_tool_result("hello world")
+        assert result == "hello world"
+
+    def test_render_tool_result_long_result_truncated(self, agent):
+        # Fill the context so the budget is very tight.
+        agent.context_tokens = 40000
+        long_text = "x" * 10000
+        result = agent.render_tool_result(long_text)
+        assert "[" in result and "omitted" in result
+        assert len(result) < len(long_text)
+
+    def test_render_tool_result_zero_budget_returns_placeholder(self, agent):
+        agent.context_tokens = 99999
+        result = agent.render_tool_result("anything")
+        assert "omitted" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_context_tokens_updated_by_get_context(self, agent):
+        agent.memory.retrieve_short_memory = AsyncMock(
+            return_value=[UserMessage(content="hello"), AIMessage(content="world")]
+        )
+        agent.memory.retrieve_long_memory = AsyncMock(return_value=SystemMessage(content=""))
+        await agent.get_context()
+        assert agent.context_tokens > 0
+
+
 class TestMaxIter:
     def test_max_iter_constant(self):
         assert MAX_ITER == 10

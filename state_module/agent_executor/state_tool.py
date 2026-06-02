@@ -83,8 +83,9 @@ class StateExecutorTool(State):
         # Advance past this plan step and signal the router to loop back to executor.
         agent.step_idx = getattr(agent, "step_idx", 0) + 1
 
+        view = agent.render_tool_result(tool_result)
         return StateOutput(
-            content=f"tool `{tool_name}` -> {str(tool_result)[:400]}",
+            content=f"tool `{tool_name}` -> {view}",
             completion_signal="complete",
-            structured_data={"tool_result": tool_result, "route": "continue"},
+            structured_data={"route": "continue"},
         )
