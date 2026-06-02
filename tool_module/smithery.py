@@ -27,6 +27,10 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
+# Network timeout for all Smithery HTTP calls. A hung upstream must not
+# block the agent indefinitely; 30s total / 10s connect is generous but bounded.
+_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10)
+
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -132,8 +136,17 @@ class SmitheryClient:
             body["headers"] = headers
 
         logger.debug("smithery PUT %s", url)
-        async with session.put(url, json=body, headers=self._headers()) as resp:
+        async with session.put(url, json=body, headers=self._headers(), timeout=_HTTP_TIMEOUT) as resp:
             text = await resp.text()
+            if resp.status == 401:
+                # 401 means the user must complete an OAuth / setup flow, not a
+                # transient server error. Raise AuthRequiredError so the caller
+                # can surface a connect-prompt rather than treating this as a blip.
+                raise AuthRequiredError(
+                    service=connection_id,
+                    user_id=None,
+                    message=f"Smithery auth required for {connection_id}: {text}",
+                )
             if resp.status >= 400:
                 raise SmitheryError(f"upsert_connection {resp.status}: {text}")
             return await resp.json() if text else {}
@@ -162,8 +175,14 @@ class SmitheryClient:
         headers["Accept"] = "application/json, text/event-stream"
 
         logger.debug("smithery POST %s method=%s", url, method)
-        async with session.post(url, json=rpc_body, headers=headers) as resp:
+        async with session.post(url, json=rpc_body, headers=headers, timeout=_HTTP_TIMEOUT) as resp:
             text = await resp.text()
+            if resp.status == 401:
+                raise AuthRequiredError(
+                    service=connection_id,
+                    user_id=None,
+                    message=f"Smithery auth required for {connection_id}: {text}",
+                )
             if resp.status >= 400:
                 raise SmitheryError(f"jsonrpc {method} {resp.status}: {text}")
 
@@ -175,15 +194,21 @@ class SmitheryClient:
                     data = await resp.json(content_type=None)
                 except Exception:
                     # Fallback for SSE format (text/event-stream)
+                    parsed_ok = False
                     for line in text.splitlines():
                         if line.startswith("data: "):
                             try:
-                                parsed = json.loads(line[6:])
-                                if isinstance(parsed, dict) and ("result" in parsed or "error" in parsed):
-                                    data = parsed
+                                candidate = json.loads(line[6:])
+                                if isinstance(candidate, dict) and ("result" in candidate or "error" in candidate):
+                                    data = candidate
+                                    parsed_ok = True
                                     break
                             except json.JSONDecodeError:
                                 pass
+                    if not parsed_ok:
+                        raise SmitheryError(
+                            f"jsonrpc {method}: could not parse response (not JSON or SSE): {text[:200]}"
+                        )
             if "error" in data:
                 err = data["error"] or {}
                 raise SmitheryError(f"{method} rpc error {err.get('code')}: {err.get('message')}")
@@ -452,7 +477,12 @@ class SmitheryManager:
                     try:
                         await self._ensure_user_server(session, user_id, candidate)
                     except AuthRequiredError:
-                        # this one isn't connected yet, keep scanning
+                        # Not connected yet; keep scanning other servers.
+                        continue
+                    except SmitheryError as e:
+                        # Network/server error on this candidate; log and skip
+                        # rather than aborting the whole tool call.
+                        logger.warning("skipping server %s during discovery: %s", candidate, e)
                         continue
                     if tool_name in self._tool_registry:
                         server_name = self._tool_registry[tool_name]
