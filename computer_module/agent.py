@@ -154,29 +154,21 @@ class ComputerAgent:
                 self._emit_event({"kind": "completed", "summary": summary[:500]})
                 return {"status": "completed", "summary": summary, "outputs": outputs}
 
-            # Execute all tool calls and feed results back.
-            # Use native tool_calls format if possible; otherwise use simple
-            # assistant+user pairs (the fallback path uses fake IDs that some
-            # endpoints reject in the tool role).
-            is_native = self.model._native is True
-
-            if is_native:
-                msg_dict: dict[str, Any] = {
-                    "role": "assistant",
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                        }
-                        for tc in assistant_msg.tool_calls
-                    ],
-                }
-                if assistant_msg.content:
-                    msg_dict["content"] = assistant_msg.content
-                messages.append(msg_dict)
-            # (fallback: the assistant's JSON action is already in its content
-            #  from the previous iteration, appended below with tool results)
+            # Append the assistant turn and execute all tool calls.
+            msg_dict: dict[str, Any] = {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in assistant_msg.tool_calls
+                ],
+            }
+            if assistant_msg.content:
+                msg_dict["content"] = assistant_msg.content
+            messages.append(msg_dict)
 
             tool_results = []
             for tc in assistant_msg.tool_calls:
@@ -198,16 +190,11 @@ class ComputerAgent:
                     if args["path"] not in outputs:
                         outputs.append(args["path"])
 
-                if is_native:
-                    tool_results.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": str(result),
-                    })
-                else:
-                    # Fallback: append as assistant (the action JSON) + user (the result)
-                    tool_results.append({"role": "assistant", "content": tc.function.arguments or "{}"})
-                    tool_results.append({"role": "user", "content": f"Result: {result}"})
+                tool_results.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": str(result),
+                })
 
             messages.extend(tool_results)
 
