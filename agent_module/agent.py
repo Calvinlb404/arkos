@@ -149,7 +149,7 @@ class Agent:
         whose value must be one of the available tool IDs.
         """
 
-        server_tool_map = await self.tool_manager.list_all_tools()
+        server_tool_map = await self.tool_manager.list_all_tools(self.current_user_id)
 
         enum_members = {}
         for server_name in server_tool_map:

@@ -60,12 +60,12 @@ class StateTool(State):
 
         tool_name = parsed_choice.tool_name.value
 
-        registry = getattr(agent.tool_manager, "_tool_registry", {})
-        if tool_name not in registry:
+        # Resolve scoped to THIS user (shared + their per-user tools only).
+        server_name = agent.tool_manager._resolve_server(tool_name, agent.current_user_id)
+        if not server_name:
             raise ValueError(f"model chose unknown tool: {tool_name!r}")
 
-        server_name = registry[tool_name]
-        all_tools = await agent.tool_manager.list_all_tools()
+        all_tools = await agent.tool_manager.list_all_tools(agent.current_user_id)
         tool_spec = all_tools[server_name][tool_name]
 
         tool_args_schema = {

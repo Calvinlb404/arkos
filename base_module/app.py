@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from agent_module.agent import Agent
+from base_module.jwt_utils import CurrentUser, assert_secure_secret
 from base_module.tasks import router as tasks_router
 from base_module.users import router as users_router
 from config_module.loader import config
@@ -64,11 +65,18 @@ llm = ArkModelLink(base_url=config.get("llm.base_url"), max_tokens=config.get("l
 _memory_cache: dict[str, Memory] = {}
 
 # Module-level prompt + tools, written by startup/refresh, stamped onto each per-request agent.
+# Concurrency: only ever REASSIGNED as whole new values (never mutated in place),
+# so a concurrent reader sees the old complete value or the new one, never a
+# half-built one. Keep it that way -- build a new dict/str, then assign.
 _system_prompt: str = ""
 _available_tools: dict = {}
 
 
 def _get_or_create_memory(user_id: str) -> Memory:
+    # Race-free under single-threaded asyncio: there is NO await between the
+    # `in` check and the assignment, so two requests cannot both create a
+    # Memory for the same user. Do not add an await inside this function, or
+    # you reintroduce the double-init race (MULTIUSER Task 3).
     if user_id not in _memory_cache:
         _memory_cache[user_id] = Memory(
             user_id=user_id,
@@ -200,6 +208,16 @@ async def startup():
     # None errors mid-request.
     config.validate_required(["database.url", "llm.base_url", "llm.model_name"])
 
+    # Refuse to boot with a forgeable default JWT secret outside demo mode.
+    assert_secure_secret()
+    from base_module.jwt_utils import _demo_mode
+
+    if _demo_mode():
+        logger.warning(
+            "[ark] ARK_DEMO_MODE is ON -- unauthenticated X-User-ID impersonation is allowed. "
+            "NEVER enable in a shared/public deployment (UNSAFE_DECISIONS U2)."
+        )
+
     base_system_prompt = (config.get("app.system_prompt") or "").strip()
 
     if tool_manager:
@@ -237,13 +255,13 @@ async def startup():
 
 
 @app.get("/services")
-async def list_services(request: Request):
+async def list_services(current: dict = CurrentUser):
     """
     Returns the connection state of every per-user (requires_auth) service
     for the calling user, plus every no-auth shared service. The frontend
     uses this to render a connections panel with Smithery setup links.
     """
-    user_id = request.headers.get("X-User-ID") or config.get("memory.fallback_user_id")
+    user_id = current["user_id"]
 
     if not tool_manager:
         return JSONResponse(content={"user_id": user_id, "shared": [], "per_user": []})
@@ -294,7 +312,7 @@ def _callback_return_url(request: Request, service: str, user_id: str) -> str:
 
 
 @app.post("/services/{service}/connect")
-async def connect_service(service: str, request: Request):
+async def connect_service(service: str, request: Request, current: dict = CurrentUser):
     """
     Trigger (or re-trigger) the per-user Smithery OAuth flow for a given
     service. Returns the setup_url if Smithery needs the user to authorize,
@@ -304,7 +322,7 @@ async def connect_service(service: str, request: Request):
     in pointing at /oauth/callback/{service}, so when the user finishes
     OAuth on Smithery's hosted page they get bounced back into the ark app.
     """
-    user_id = request.headers.get("X-User-ID") or config.get("memory.fallback_user_id")
+    user_id = current["user_id"]
 
     if not tool_manager:
         return JSONResponse(
@@ -346,22 +364,23 @@ async def connect_service(service: str, request: Request):
 
 
 @app.post("/services/{service}/disconnect")
-async def disconnect_service(service: str, request: Request):
+async def disconnect_service(service: str, current: dict = CurrentUser):
     """Forget a per-user connection client-side. Smithery retains the token
     until the user revokes it there; we just stop tracking/surfacing it."""
-    user_id = request.headers.get("X-User-ID") or config.get("memory.fallback_user_id")
+    user_id = current["user_id"]
     if not tool_manager:
         return JSONResponse(content={"error": "tool manager disabled"}, status_code=503)
 
     by_server = tool_manager._user_tools.get(user_id) or {}
     by_server.pop(service, None)
-    tool_manager._pending.get(user_id, {}).pop(service, None)
-    # rebuild the tool registry without the disconnected service's tools
-    tool_manager._tool_registry = {
-        tname: sname
-        for tname, sname in tool_manager._tool_registry.items()
-        if sname != service or sname in tool_manager._shared_tools
-    }
+    if user_id in tool_manager._pending:
+        tool_manager._pending[user_id].pop(service, None)
+    # Drop this service's tools from THIS user's registry only (not shared/global).
+    user_reg = tool_manager._user_tool_registry.get(user_id)
+    if user_reg:
+        tool_manager._user_tool_registry[user_id] = {
+            tname: sname for tname, sname in user_reg.items() if sname != service
+        }
     await _refresh_system_prompt()
     return JSONResponse(content={"service": service, "status": "disconnected"})
 
@@ -376,6 +395,9 @@ async def oauth_callback(service: str, request: Request):
     """
     from fastapi.responses import HTMLResponse
 
+    # UNSAFE_DECISIONS U1: this is a third-party browser redirect from Smithery
+    # and cannot carry a Bearer token, so identity comes from the query param the
+    # setup_url was minted with. Known, accepted exception -- not CurrentUser.
     user_id = request.query_params.get("user_id") or config.get("memory.fallback_user_id")
     status = "connected"
     error_msg: str | None = None
@@ -477,7 +499,7 @@ async def health_check():
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: Request):
+async def chat_completions(request: Request, current: dict = CurrentUser):
     """OAI-compatible endpoint wrapping the full ArkOS agent."""
     payload = await request.json()
 
@@ -485,8 +507,8 @@ async def chat_completions(request: Request):
     model = payload.get("model", "ark-agent")
     stream = payload.get("stream", False)
 
-    # Extract user_id from header or body for per-user tool auth
-    user_id = request.headers.get("X-User-ID") or payload.get("user") or payload.get("user_id")
+    # Identity comes from the verified token (CurrentUser), never the body/header.
+    user_id = current["user_id"]
 
     # Lazily connect any per-user OAuth servers (e.g. Linear) that the user
     # has already authorized.  This populates tool_manager._user_tools so
@@ -508,8 +530,7 @@ async def chat_completions(request: Request):
                     await tool_manager._ensure_user_server(_sess, user_id, svc_name)
         await _refresh_system_prompt()
 
-    effective_user_id = user_id or config.get("memory.fallback_user_id")
-    req_agent = _make_agent(effective_user_id)
+    req_agent = _make_agent(user_id)
 
     context_msgs = []
     context_msgs.append(SystemMessage(content=req_agent.system_prompt))
@@ -531,7 +552,7 @@ async def chat_completions(request: Request):
         async def generate_stream():
             """Yield SSE chunks in OpenAI streaming format."""
             chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-            async for chunk in req_agent.step_stream(context_msgs, user_id=effective_user_id):
+            async for chunk in req_agent.step_stream(context_msgs, user_id=user_id):
                 data = {
                     "id": chunk_id,
                     "object": "chat.completion.chunk",
@@ -570,7 +591,7 @@ async def chat_completions(request: Request):
         )
 
     # Non-streaming response
-    agent_response = await req_agent.step(context_msgs, user_id=effective_user_id)
+    agent_response = await req_agent.step(context_msgs, user_id=user_id)
     final_msg = agent_response or AIMessage(content="(no response)")
 
     completion = {

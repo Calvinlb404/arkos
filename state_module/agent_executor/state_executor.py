@@ -80,7 +80,7 @@ class StateExecutor(State):
         tool_names: list[str] = []
         if agent.tool_manager is not None:
             try:
-                servers = await agent.tool_manager.list_all_tools()
+                servers = await agent.tool_manager.list_all_tools(agent.current_user_id)
                 for _server, tools in servers.items():
                     for tname, tspec in tools.items():
                         tool_names.append(tname)

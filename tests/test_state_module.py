@@ -259,8 +259,10 @@ class TestStateTool:
                 AIMessage(content=json.dumps({"query": "test"})),
             ]
         )
+        mock_agent.current_user_id = "u1"
         mock_agent.tool_manager = MagicMock()
-        mock_agent.tool_manager._tool_registry = {"search": "brave-search"}
+        # Tool resolution is now user-scoped via _resolve_server (shared + per-user).
+        mock_agent.tool_manager._resolve_server = MagicMock(return_value="brave-search")
         mock_agent.tool_manager.list_all_tools = AsyncMock(
             return_value={
                 "brave-search": {

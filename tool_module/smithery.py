@@ -278,8 +278,13 @@ class SmitheryManager:
         # kept for back-compat with callers that previously poked at MCPToolManager internals
         self.clients: dict[str, Any] = {}
 
-        # tool_name -> server_name
+        # SHARED tools only: tool_name -> server_name. No-auth servers are the
+        # same for everyone, so a global map is correct here.
         self._tool_registry: dict[str, str] = {}
+
+        # PER-USER tools: user_id -> {tool_name -> server_name}. Keeps one user's
+        # tool routing out of another's (MULTIUSER Task 2 / cross-user fix).
+        self._user_tool_registry: dict[str, dict[str, str]] = {}
 
         # {server_name: [tool_spec, ...]} for no-auth shared servers (seeded at init)
         self._shared_tools: dict[str, list[dict[str, Any]]] = {}
@@ -392,12 +397,14 @@ class SmitheryManager:
         if state == "connected":
             tools = await self._fetch_tools(session, connection_id)
             self._user_tools.setdefault(user_id, {})[server_name] = tools
+            user_reg = self._user_tool_registry.setdefault(user_id, {})
             for tool in tools:
                 tname = tool.get("name")
                 if tname:
-                    self._tool_registry[tname] = server_name
-            # clear any stale pending auth
-            self._pending.get(user_id, {}).pop(server_name, None)
+                    user_reg[tname] = server_name
+            # clear any stale pending auth (pop from the real nested dict, not a copy)
+            if user_id in self._pending:
+                self._pending[user_id].pop(server_name, None)
             return tools
 
         # needs auth or config
@@ -414,14 +421,14 @@ class SmitheryManager:
             ),
         )
 
-    async def list_all_tools(self) -> dict[str, dict[str, dict[str, Any]]]:
+    async def list_all_tools(self, user_id: str | None = None) -> dict[str, dict[str, dict[str, Any]]]:
         """
         {server_name: {tool_name: tool_spec_with_metadata}}
 
-        Only returns tools from servers that have been successfully connected
-        (either shared at startup, or on-demand per user). Per-user servers are
-        surfaced when the agent calls this while `current_user_id` is pinned
-        and that user has already connected them.
+        Always includes shared (no-auth) tools. Includes per-user tools ONLY for
+        the given `user_id` -- one user never sees another's connected tools.
+        With user_id=None, only shared tools are returned (see UNSAFE_DECISIONS U9
+        for the shared system-prompt path that still calls it without a user).
         """
         out: dict[str, dict[str, dict[str, Any]]] = {}
 
@@ -440,15 +447,27 @@ class SmitheryManager:
         for server_name, tools in self._shared_tools.items():
             pack(server_name, tools)
 
-        # union of per-user tools across all known users
-        for _user_id, by_server in self._user_tools.items():
-            for server_name, tools in by_server.items():
-                out.setdefault(server_name, {})
+        # Per-user tools: only the calling user's. Never union across users.
+        if user_id:
+            for server_name, tools in (self._user_tools.get(user_id) or {}).items():
                 pack(server_name, tools)
 
         return out
 
     # ---------- tool execution ----------
+
+    def _resolve_server(self, tool_name: str, user_id: str | None) -> str | None:
+        """
+        Resolve a tool to its server, scoped to the calling user.
+
+        Checks the user's per-user registry first, then the shared registry.
+        A tool another user connected is never visible here (cross-user fix).
+        """
+        if user_id:
+            user_server = self._user_tool_registry.get(user_id, {}).get(tool_name)
+            if user_server:
+                return user_server
+        return self._tool_registry.get(tool_name)  # shared (no-auth) tools
 
     async def call_tool(
         self,
@@ -456,7 +475,7 @@ class SmitheryManager:
         arguments: dict[str, Any],
         user_id: str | None = None,
     ) -> Any:
-        server_name = self._tool_registry.get(tool_name)
+        server_name = self._resolve_server(tool_name, user_id)
 
         async with aiohttp.ClientSession() as session:
             # If we don't know where this tool lives yet, it might belong to a
@@ -484,8 +503,9 @@ class SmitheryManager:
                         # rather than aborting the whole tool call.
                         logger.warning("skipping server %s during discovery: %s", candidate, e)
                         continue
-                    if tool_name in self._tool_registry:
-                        server_name = self._tool_registry[tool_name]
+                    resolved = self._resolve_server(tool_name, user_id)
+                    if resolved:
+                        server_name = resolved
                         break
 
             if not server_name:
@@ -540,6 +560,7 @@ class SmitheryManager:
         """No persistent sessions to close (each call opens its own ClientSession)."""
         self.clients.clear()
         self._tool_registry.clear()
+        self._user_tool_registry.clear()
         self._shared_tools.clear()
         self._user_tools.clear()
         self._pending.clear()

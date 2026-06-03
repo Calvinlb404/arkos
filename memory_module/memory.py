@@ -39,7 +39,8 @@ CLASS_TO_ROLE: dict[type[Message], str] = {
 # Global Mem0 config ---------------------
 # Load .env file
 load_dotenv()
-os.environ["OPENAI_API_KEY"] = "sk"
+# (removed: os.environ["OPENAI_API_KEY"] = "sk" -- it overwrote the real key at
+#  import time and silently broke mem0. MULTIUSER Task 3 / UNSAFE_DECISIONS.)
 
 config = {
     "vector_store": {
