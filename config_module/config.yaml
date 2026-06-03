@@ -49,9 +49,11 @@ state:
 computer_agent:
   llm:
     base_url: "http://localhost:30000/v1"   # local model now; point at a frontier endpoint later
-    model_name: "tgi"
+    model_name: "Qwen/Qwen3-8B"
     max_tokens: 4096
     temperature: 0.7
+    # To enable native tool-calling: restart SGLang with --tool-call-parser qwen3
+    # Without it, the agent falls back to constrained-JSON action format automatically.
   sandbox:
     template: "base"                         # e2b template
     timeout_seconds: 300                     # keep-alive while working
