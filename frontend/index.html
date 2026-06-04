@@ -37,45 +37,67 @@
   </nav>
 
   <main id="main">
-    <div class="hero">
-      <h1>buddy's desk<span class="cursor">_</span></h1>
-      <div class="sub">
-        your digital life, handled in the background. buddy watches, triages, and workshops plans for your approval.
+    <div id="deskContent">
+      <div class="hero">
+        <h1>buddy's desk<span class="cursor">_</span></h1>
+        <div class="sub">
+          your digital life, handled in the background. buddy watches, triages, and workshops plans for your approval.
+        </div>
+      </div>
+
+      <div class="zones">
+        <section class="zone" id="zone-approvals">
+          <header>
+            <h2>pending approvals</h2>
+            <span class="count" id="approvalsCount">0</span>
+          </header>
+          <div class="list" id="approvalsList"></div>
+        </section>
+
+        <section class="zone" id="zone-tasks">
+          <header>
+            <h2>active tasks</h2>
+            <span class="count" id="tasksCount">0</span>
+          </header>
+          <div class="list" id="tasksList"></div>
+        </section>
+
+        <section class="zone" id="zone-watching">
+          <header>
+            <h2>watching</h2>
+            <span class="count" id="watchingCount">0</span>
+          </header>
+          <div class="list" id="watchingList"></div>
+        </section>
       </div>
     </div>
 
-    <div class="zones">
-      <section class="zone" id="zone-approvals">
-        <header>
-          <h2>pending approvals</h2>
-          <span class="count" id="approvalsCount">0</span>
-        </header>
-        <div class="list" id="approvalsList"></div>
-      </section>
-
-      <section class="zone" id="zone-tasks">
-        <header>
-          <h2>active tasks</h2>
-          <span class="count" id="tasksCount">0</span>
-        </header>
-        <div class="list" id="tasksList"></div>
-      </section>
-
-      <section class="zone" id="zone-computer">
-        <header>
-          <h2>computer</h2>
-          <span class="count" id="computerCount">0</span>
-        </header>
-        <div class="list" id="computerList"></div>
-      </section>
-
-      <section class="zone" id="zone-watching">
-        <header>
-          <h2>watching</h2>
-          <span class="count" id="watchingCount">0</span>
-        </header>
-        <div class="list" id="watchingList"></div>
-      </section>
+    <div id="computerPage" class="hidden">
+      <div class="cp-header">
+        <h1>computer<span class="cursor">_</span></h1>
+        <div class="sub">buddy's persistent computer. tasks run here; files persist across sessions.</div>
+      </div>
+      <div class="cp-body">
+        <aside class="cp-tasks">
+          <div class="cp-tasks-head">tasks <span class="count" id="computerCount">0</span></div>
+          <div id="cvTaskList"><div class="empty">no tasks yet. ask buddy to write some code.</div></div>
+        </aside>
+        <div class="cp-fs">
+          <div class="cv-files">
+            <div class="cv-header">
+              <span id="cvPath">/home/user</span>
+              <button class="mini" id="cvUp">up</button>
+            </div>
+            <div class="cv-entries" id="cvEntries">
+              <div class="empty">loading...</div>
+            </div>
+          </div>
+          <div class="cv-content">
+            <div class="cv-content-header" id="cvFileHeader">no file selected</div>
+            <pre class="cv-file-body" id="cvFileBody"><span style="color:var(--fg-mute)">click a file to read it</span></pre>
+          </div>
+        </div>
+      </div>
     </div>
   </main>
 
@@ -91,28 +113,6 @@
       <span><kbd>enter</kbd> send</span>
       <span><kbd>esc</kbd> clear</span>
     </div>
-  </div>
-</div>
-
-<div class="computer-view hidden" id="computerView">
-  <div class="cv-split">
-    <div class="cv-files">
-      <div class="cv-header">
-        <span id="cvPath">/home/user</span>
-        <button class="mini" id="cvUp">up</button>
-      </div>
-      <div class="cv-entries" id="cvEntries">
-        <div class="empty">select a path</div>
-      </div>
-    </div>
-    <div class="cv-content">
-      <div class="cv-content-header" id="cvFileHeader"></div>
-      <pre class="cv-file-body" id="cvFileBody"><span style="color:var(--fg-mute)">click a file to read it</span></pre>
-    </div>
-  </div>
-  <div class="cv-tasks">
-    <h3>computer tasks</h3>
-    <div id="cvTaskList"><div class="empty">no tasks yet</div></div>
   </div>
 </div>
 

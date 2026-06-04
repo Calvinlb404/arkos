@@ -714,121 +714,187 @@ button.icon:hover { color: var(--fg); }
 }
 .modal-card .actions button.danger { border-color: var(--err); color: var(--err); }
 
-/* ---------- computer tag + spin indicator ---------- */
-.computer-tag {
-  font-size: 10px;
-  font-family: var(--mono);
-  color: var(--fg-mute);
-  border: 1px solid var(--bg-line);
-  padding: 1px 5px;
-  border-radius: 2px;
-  margin-right: 6px;
-  flex-shrink: 0;
-}
-.computer-spin {
-  width: 7px;
-  height: 7px;
-  border: 1.5px solid var(--fg);
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  display: inline-block;
-  flex-shrink: 0;
-}
+/* ---------- computer page (a real route inside main) ---------- */
+#deskContent.hidden { display: none; }
 
-/* ---------- computer full view ---------- */
-.computer-view {
-  position: fixed;
+#computerPage {
+  position: absolute;        /* fill the main grid area edge-to-edge */
   inset: 0;
-  background: var(--bg);
-  z-index: 50;
   display: flex;
   flex-direction: column;
+  padding: 28px 36px 24px;
   font-family: var(--mono);
-  font-size: 12px;
 }
-.computer-view.hidden { display: none; }
+#computerPage.hidden { display: none; }
 
-.cv-split {
-  display: grid;
-  grid-template-columns: 240px 1fr;
+.cp-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 22px;
+  flex-shrink: 0;
+}
+.cp-header h1 {
+  margin: 0;
+  font-weight: 400;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+.cp-header .sub {
+  color: var(--fg-mute);
+  font-size: 11px;
+  text-align: right;
+  max-width: 360px;
+}
+
+.cp-body {
   flex: 1;
   min-height: 0;
-  border-bottom: 1px solid var(--bg-line);
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 20px;
 }
 
+/* task list sidebar */
+.cp-tasks {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--bg-line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.cp-tasks-head {
+  font-size: 10px;
+  color: var(--fg-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--bg-line);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.cp-tasks-head .count {
+  font-size: 10px;
+  color: var(--fg);
+  background: var(--bg-line);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+#cvTaskList { overflow-y: auto; flex: 1; padding: 8px; }
+
+.cp-task {
+  border: 1px solid var(--bg-line);
+  border-radius: 3px;
+  margin-bottom: 8px;
+  background: var(--bg-soft, transparent);
+}
+.cp-task-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  cursor: pointer;
+}
+.cp-task-top:hover { background: var(--bg-line); }
+.cp-task-status { font-size: 11px; flex-shrink: 0; width: 12px; text-align: center; }
+.cp-task-status.ok { color: var(--ok); }
+.cp-task-status.err { color: var(--err); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.cp-task-status .spin {
+  width: 8px; height: 8px;
+  border: 1.5px solid var(--fg); border-top-color: transparent;
+  border-radius: 50%; animation: spin 0.8s linear infinite; display: inline-block;
+}
+.cp-task-text { flex: 1; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-task-when { font-size: 10px; color: var(--fg-mute); flex-shrink: 0; }
+.cp-task-summary { font-size: 10px; color: var(--fg-mute); padding: 0 11px 9px; line-height: 1.5; }
+.cp-task-outputs { padding: 0 11px 9px; display: flex; flex-wrap: wrap; gap: 4px; }
+.cp-task-outputs span {
+  font-size: 9px; color: var(--fg-mute);
+  border: 1px solid var(--bg-line); border-radius: 2px; padding: 1px 4px;
+}
+
+.cp-events {
+  border-top: 1px solid var(--bg-line);
+  padding: 8px 11px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.cp-ev {
+  display: flex;
+  gap: 8px;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--fg-mute);
+}
+.cp-ev-kind { color: var(--fg); flex-shrink: 0; width: 14px; text-align: center; }
+
+/* filesystem pane */
+.cp-fs {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 0;
+  border: 1px solid var(--bg-line);
+  border-radius: 3px;
+  overflow: hidden;
+}
 .cv-files {
   border-right: 1px solid var(--bg-line);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 0;
 }
-
 .cv-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  gap: 8px;
+  padding: 9px 12px;
   border-bottom: 1px solid var(--bg-line);
   font-size: 10px;
   color: var(--fg-mute);
   flex-shrink: 0;
 }
-#cvPath { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#cvPath { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.cv-header .mini { flex-shrink: 0; }
 
-.cv-entries {
-  overflow-y: auto;
-  flex: 1;
-  padding: 4px 0;
-}
-
+.cv-entries { overflow-y: auto; flex: 1; padding: 4px 0; }
 .cv-entry {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   padding: 4px 12px;
   cursor: pointer;
   color: var(--fg);
-  transition: background 0.1s;
+  font-size: 11px;
 }
 .cv-entry:hover { background: var(--bg-line); }
-.cv-entry.is-dir { color: var(--fg); font-weight: 500; }
-.cv-size { font-size: 10px; color: var(--fg-mute); }
+.cv-entry.selected { background: var(--bg-line); }
+.cv-entry.is-dir .cv-name { font-weight: 500; }
+.cv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-size { font-size: 9px; color: var(--fg-mute); flex-shrink: 0; margin-left: 8px; }
 
-.cv-content {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
+.cv-content { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 .cv-content-header {
-  padding: 8px 14px;
+  padding: 9px 14px;
   border-bottom: 1px solid var(--bg-line);
   font-size: 10px;
   color: var(--fg-mute);
   flex-shrink: 0;
-  font-style: italic;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .cv-file-body {
   flex: 1;
   overflow: auto;
-  padding: 12px 16px;
+  padding: 14px 18px;
   margin: 0;
   font-size: 11px;
-  line-height: 1.6;
+  line-height: 1.65;
   color: var(--fg);
   white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.cv-tasks {
-  padding: 16px 20px;
-  overflow-y: auto;
-  max-height: 240px;
-  border-top: 1px solid var(--bg-line);
-}
-.cv-tasks h3 {
-  font-size: 11px;
-  color: var(--fg-mute);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin: 0 0 10px;
+  word-break: break-word;
 }

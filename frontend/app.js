@@ -194,12 +194,11 @@ function render() {
     }
   }
 
-  renderComputerZone();
+  renderComputerTasksList();
 
   document.getElementById('approvalsCount').textContent = state.approvals.length;
   document.getElementById('tasksCount').textContent = state.tasks.length;
   document.getElementById('watchingCount').textContent = state.watching.length;
-  document.getElementById('computerCount').textContent = state.computerTasks.filter((t) => t.status === 'running' || t.status === 'pending').length;
   document.getElementById('approvalsPill').textContent = state.approvals.length + ' pending';
 
   renderLog();
@@ -235,140 +234,134 @@ function renderEvents(taskId) {
   return `<div class="task-events">${rows}</div>`;
 }
 
-// ---------- computer zone (on the desk) ----------
-function renderComputerZone() {
-  const el = document.getElementById('computerList');
-  const active = state.computerTasks.filter((t) => ['running','pending'].includes(t.status));
-  const recent = state.computerTasks.filter((t) => ['completed','failed'].includes(t.status));
-  if (!active.length && !recent.length) {
-    el.innerHTML = '<div class="empty">buddy\'s computer is idle</div>';
+// ---------- computer page: task list (left sidebar) ----------
+function renderComputerTasksList() {
+  const taskList = document.getElementById('cvTaskList');
+  const countEl = document.getElementById('computerCount');
+  if (countEl) {
+    countEl.textContent = state.computerTasks.filter((t) => ['running', 'pending'].includes(t.status)).length;
+  }
+  if (!taskList) return;
+  if (!state.computerTasks.length) {
+    taskList.innerHTML = '<div class="empty">no tasks yet. ask buddy to write some code.</div>';
     return;
   }
-  el.innerHTML = '';
-  for (const t of active) {
-    const isExp = state.computerExpandedTask === t.task_id;
-    const evHtml = isExp ? renderComputerEvents(t.task_id) : '';
-    const row = document.createElement('div');
-    row.className = 'task-row' + (isExp ? ' expanded' : '');
-    row.innerHTML = `
-      <div class="row-top">
-        <div class="label">
-          <span class="spin computer-spin" title="using the computer"></span>
-          <span class="computer-tag">⬛ computer</span>
-          <span class="text">${escapeHtml((t.prompt || '').slice(0, 80))}</span>
-        </div>
-        <div class="row-actions">
-          <span class="when">${relTime(t.updated_at)}</span>
-          <button class="icon" data-cv-expand="${t.task_id}">${isExp ? '▾' : '▸'}</button>
-        </div>
-      </div>
-      ${evHtml}`;
-    el.appendChild(row);
-  }
-  for (const t of recent.slice(0, 3)) {
-    const row = document.createElement('div');
-    row.className = 'card';
+  taskList.innerHTML = '';
+  for (const t of state.computerTasks) {
+    const running = ['running', 'pending'].includes(t.status);
     const ok = t.status === 'completed';
-    row.innerHTML = `
-      <div class="meta">
-        <span class="tag" style="color:var(--${ok ? 'ok' : 'err'});border-color:var(--${ok ? 'ok' : 'err'})">${t.status}</span>
-        <span class="computer-tag">⬛ computer</span>
-        <span>${relTime(t.updated_at)} ago</span>
+    const isExp = state.computerExpandedTask === t.task_id;
+    const statusCls = running ? 'running' : (ok ? 'ok' : 'err');
+    const el = document.createElement('div');
+    el.className = 'cp-task' + (isExp ? ' expanded' : '');
+    el.innerHTML = `
+      <div class="cp-task-top" data-cv-expand="${t.task_id}">
+        <span class="cp-task-status ${statusCls}">${running ? '<span class="spin"></span>' : (ok ? '✓' : '✗')}</span>
+        <span class="cp-task-text">${escapeHtml((t.prompt || '').slice(0, 90))}</span>
+        <span class="cp-task-when">${relTime(t.updated_at)}</span>
       </div>
-      <div class="title">${escapeHtml((t.prompt || '').slice(0, 120))}</div>
-      ${t.summary ? `<div class="plan">${escapeHtml(t.summary.slice(0, 200))}</div>` : ''}`;
-    el.appendChild(row);
+      ${t.summary ? `<div class="cp-task-summary">${escapeHtml(t.summary.slice(0, 200))}</div>` : ''}
+      ${(t.outputs && t.outputs.length) ? `<div class="cp-task-outputs">${t.outputs.map((p) => `<span>${escapeHtml(p)}</span>`).join('')}</div>` : ''}
+      ${isExp ? renderComputerEvents(t.task_id) : ''}
+    `;
+    taskList.appendChild(el);
   }
 }
 
 function renderComputerEvents(taskId) {
   const evs = state.computerTaskEvents[taskId] || [];
-  if (!evs.length) return `<div class="task-events">(no events yet)</div>`;
-  const rows = evs.slice(-20).map((e) => {
+  if (!evs.length) return `<div class="cp-events">(no events yet)</div>`;
+  const rows = evs.slice(-30).map((e) => {
     const icon = KIND_ICON[e.kind] || '·';
-    const content = (e.content || '').slice(0, 200);
-    return `<div class="ev-row"><span class="ev-kind">${escapeHtml(icon)} ${escapeHtml(e.kind)}</span>${escapeHtml(content)}</div>`;
+    const content = (e.content || '').slice(0, 160);
+    return `<div class="cp-ev"><span class="cp-ev-kind">${escapeHtml(icon)}</span><span>${escapeHtml(content || e.kind)}</span></div>`;
   }).join('');
-  return `<div class="task-events">${rows}</div>`;
+  return `<div class="cp-events">${rows}</div>`;
 }
 
-// ---------- computer full view (the tab) ----------
-function renderComputerView() {
-  const taskList = document.getElementById('cvTaskList');
-  if (!state.computerTasks.length) {
-    taskList.innerHTML = '<div class="empty">no tasks yet. ask buddy to write some code.</div>';
-  } else {
-    taskList.innerHTML = '';
-    for (const t of state.computerTasks) {
-      const ok = t.status === 'completed';
-      const running = ['running','pending'].includes(t.status);
-      const el = document.createElement('div');
-      el.className = 'card';
-      const statusColor = running ? '' : (ok ? 'color:var(--ok);border-color:var(--ok)' : 'color:var(--err);border-color:var(--err)');
-      el.innerHTML = `
-        <div class="meta">
-          <span class="tag" style="${statusColor}">${running ? '<span class="spin" style="display:inline-block;margin-right:4px"></span>' : ''}${t.status}</span>
-          <span>${relTime(t.updated_at)} ago</span>
-        </div>
-        <div class="title">${escapeHtml((t.prompt || '').slice(0, 160))}</div>
-        ${t.summary ? `<div class="plan">${escapeHtml(t.summary.slice(0, 300))}</div>` : ''}
-        ${(t.outputs && t.outputs.length) ? `<div class="plan" style="font-family:monospace;font-size:10px">${t.outputs.map((p) => escapeHtml(p)).join(' ')}</div>` : ''}
-      `;
-      taskList.appendChild(el);
-    }
-  }
-
-  // filesystem
+// ---------- computer page: filesystem ----------
+function renderFiles() {
   const entries = document.getElementById('cvEntries');
-  document.getElementById('cvPath').textContent = state.computerPath;
-  entries.innerHTML = '';
+  const pathEl = document.getElementById('cvPath');
+  if (pathEl) pathEl.textContent = state.computerPath;
+  if (!entries) return;
   if (!state.computerFiles.length) {
-    entries.innerHTML = '<div class="empty">loading...</div>';
-  } else {
-    for (const f of state.computerFiles) {
-      const row = document.createElement('div');
-      row.className = 'cv-entry' + (f.is_dir ? ' is-dir' : '');
-      row.dataset.path = f.path;
-      row.dataset.isDir = f.is_dir ? '1' : '';
-      row.innerHTML = `<span>${f.is_dir ? '▶ ' : '  '}${escapeHtml(f.name)}</span><span class="cv-size">${f.is_dir ? '' : (f.size + 'b')}</span>`;
-      entries.appendChild(row);
-    }
+    entries.innerHTML = '<div class="empty">(empty)</div>';
+    return;
   }
+  entries.innerHTML = '';
+  // dirs first, then files, alphabetical
+  const sorted = [...state.computerFiles].sort((a, b) =>
+    (b.is_dir - a.is_dir) || a.name.localeCompare(b.name));
+  for (const f of sorted) {
+    const row = document.createElement('div');
+    row.className = 'cv-entry' + (f.is_dir ? ' is-dir' : '') +
+      (f.path === state.computerFilePath ? ' selected' : '');
+    row.dataset.path = f.path;
+    row.dataset.isDir = f.is_dir ? '1' : '';
+    row.innerHTML = `<span class="cv-name">${f.is_dir ? '▸' : ' '} ${escapeHtml(f.name)}</span>` +
+      `<span class="cv-size">${f.is_dir ? '' : fmtSize(f.size)}</span>`;
+    entries.appendChild(row);
+  }
+}
 
+function renderFileContent() {
   const body = document.getElementById('cvFileBody');
   const header = document.getElementById('cvFileHeader');
-  if (state.computerFileContent !== null) {
-    header.textContent = state.computerFilePath || '';
-    body.textContent = state.computerFileContent;
+  if (!body) return;
+  if (state.computerFileContent === null) {
+    header.textContent = 'no file selected';
+    body.innerHTML = '<span style="color:var(--fg-mute)">click a file to read it</span>';
+    return;
   }
+  header.textContent = state.computerFilePath || '';
+  body.textContent = state.computerFileContent;
+}
+
+function fmtSize(n) {
+  if (n < 1024) return n + 'b';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + 'k';
+  return (n / 1024 / 1024).toFixed(1) + 'm';
 }
 
 async function browseFiles(path) {
   state.computerPath = path || '/home/user';
-  state.computerFiles = [];
-  renderComputerView();
+  document.getElementById('cvEntries').innerHTML = '<div class="empty">loading...</div>';
+  document.getElementById('cvPath').textContent = state.computerPath;
   try {
     const r = await fetch(`${CONFIG.backend}/computer/files?path=${encodeURIComponent(state.computerPath)}`, {
       headers: authHeaders(),
     });
-    if (!r.ok) return;
+    if (!r.ok) {
+      document.getElementById('cvEntries').innerHTML = '<div class="empty">could not read directory</div>';
+      return;
+    }
     const j = await r.json();
     state.computerFiles = j.entries || [];
-    renderComputerView();
-  } catch (err) { console.warn('browseFiles', err); }
+    renderFiles();
+  } catch (err) {
+    console.warn('browseFiles', err);
+    document.getElementById('cvEntries').innerHTML = '<div class="empty">error</div>';
+  }
 }
 
 async function readComputerFile(path) {
+  state.computerFilePath = path;
+  renderFiles();  // re-mark selection
+  document.getElementById('cvFileHeader').textContent = path;
+  document.getElementById('cvFileBody').textContent = 'loading...';
   try {
     const r = await fetch(`${CONFIG.backend}/computer/file?path=${encodeURIComponent(path)}`, {
       headers: authHeaders(),
     });
-    if (!r.ok) return;
+    if (!r.ok) { document.getElementById('cvFileBody').textContent = '(could not read file)'; return; }
     const j = await r.json();
-    state.computerFileContent = j.content + (j.truncated ? '\n... (truncated)' : '');
-    state.computerFilePath = path;
-    renderComputerView();
-  } catch (err) { console.warn('readComputerFile', err); }
+    state.computerFileContent = j.content + (j.truncated ? '\n\n... (truncated, file is ' + j.size + ' bytes)' : '');
+    renderFileContent();
+  } catch (err) {
+    console.warn('readComputerFile', err);
+    document.getElementById('cvFileBody').textContent = '(error)';
+  }
 }
 
 async function refreshComputerTasks() {
@@ -810,15 +803,18 @@ document.querySelectorAll('nav.side a[data-view]').forEach((a) => {
     a.classList.add('active');
     const view = a.dataset.view;
     const main = document.getElementById('main');
-    const cv = document.getElementById('computerView');
+    const desk = document.getElementById('deskContent');
+    const cp = document.getElementById('computerPage');
     if (view === 'computer') {
-      main.style.display = 'none';
-      cv.classList.remove('hidden');
+      // Swap the desk content for the computer page within main (chrome stays).
+      desk.classList.add('hidden');
+      cp.classList.remove('hidden');
+      renderComputerTasksList();
+      renderFileContent();
       browseFiles(state.computerPath);
-      renderComputerView();
     } else {
-      main.style.display = '';
-      cv.classList.add('hidden');
+      cp.classList.add('hidden');
+      desk.classList.remove('hidden');
       if (view === 'chat') {
         document.getElementById('drawer').classList.add('open');
         input.focus();
