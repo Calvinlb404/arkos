@@ -21,6 +21,7 @@ from agent_module.agent import Agent
 from base_module.jwt_utils import CurrentUser, assert_secure_secret
 from base_module.tasks import router as tasks_router
 from base_module.users import router as users_router
+from computer_module.computer_router import router as computer_router
 from config_module.loader import config
 from memory_module.memory import Memory
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage
@@ -42,6 +43,7 @@ app.add_middleware(
 
 app.include_router(users_router)
 app.include_router(tasks_router)
+app.include_router(computer_router)
 
 # Serve the ark frontend at /app/ if the folder exists
 _FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))

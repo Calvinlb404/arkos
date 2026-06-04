@@ -47,11 +47,32 @@ async def run_computer_task(
         payload = {k: v for k, v in event.items() if k not in ("kind",)}
         log_computer_event(task_id, kind, content, payload)
 
+    async def ask(prompt: str) -> str:
+        """
+        Create an approval row, surface it in the existing tray, and poll
+        until the user responds. Reuses the task_approvals table so the
+        'Pending Approvals' UI works for computer tasks too.
+        """
+        from base_module.task_store import create_approval, get_approval
+        approval_id = create_approval(task_id, user_id, "text", prompt)
+        emit({"kind": "ask", "prompt": prompt, "approval_id": approval_id})
+        poll_interval = 2.0
+        timeout = 86400  # 24h
+        elapsed = 0.0
+        while elapsed < timeout:
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+            row = get_approval(approval_id)
+            if row and row["status"] not in ("pending",):
+                return row.get("response_text") or ("approved" if row.get("response_bool") else "declined")
+        return "(ask timed out)"
+
     agent = ComputerAgent(
         user_id=user_id,
         sandbox=sandbox_manager,
         tool_manager=tool_manager,
         emit=emit,
+        ask=ask,
     )
 
     try:
