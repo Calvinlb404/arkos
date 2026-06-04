@@ -541,21 +541,33 @@ document.addEventListener('click', async (e) => {
     if (planDecline) return;
     if (!plan) return;
     try {
-      const r = await fetch(CONFIG.backend + '/tasks', {
-        method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({
-          title: plan.title,
-          plan_steps: plan.plan_steps,
-          required_tools: plan.required_tools || [],
-          context_payload: { source: 'chat' },
-        }),
-      });
-      if (!r.ok) console.warn('approve-plan failed', r.status, await r.text());
+      if (plan.target === 'computer') {
+        // Approved computer plan -> dispatch the computer agent. Nothing ran
+        // until this click.
+        const r = await fetch(CONFIG.backend + '/computer/tasks', {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ prompt: plan.prompt || plan.title }),
+        });
+        if (!r.ok) console.warn('approve-computer-plan failed', r.status, await r.text());
+        await refreshComputerTasks();   // surfaces the new task into the chat
+      } else {
+        const r = await fetch(CONFIG.backend + '/tasks', {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({
+            title: plan.title,
+            plan_steps: plan.plan_steps,
+            required_tools: plan.required_tools || [],
+            context_payload: { source: 'chat' },
+          }),
+        });
+        if (!r.ok) console.warn('approve-plan failed', r.status, await r.text());
+        await refreshTasks();
+      }
     } catch (err) {
       console.warn('approve-plan error', err);
     }
-    await refreshTasks();
     return;
   }
 
