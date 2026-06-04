@@ -713,3 +713,122 @@ button.icon:hover { color: var(--fg); }
   margin-left: 6px;
 }
 .modal-card .actions button.danger { border-color: var(--err); color: var(--err); }
+
+/* ---------- computer tag + spin indicator ---------- */
+.computer-tag {
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--fg-mute);
+  border: 1px solid var(--bg-line);
+  padding: 1px 5px;
+  border-radius: 2px;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+.computer-spin {
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--fg);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* ---------- computer full view ---------- */
+.computer-view {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.computer-view.hidden { display: none; }
+
+.cv-split {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  flex: 1;
+  min-height: 0;
+  border-bottom: 1px solid var(--bg-line);
+}
+
+.cv-files {
+  border-right: 1px solid var(--bg-line);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--bg-line);
+  font-size: 10px;
+  color: var(--fg-mute);
+  flex-shrink: 0;
+}
+#cvPath { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.cv-entries {
+  overflow-y: auto;
+  flex: 1;
+  padding: 4px 0;
+}
+
+.cv-entry {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 12px;
+  cursor: pointer;
+  color: var(--fg);
+  transition: background 0.1s;
+}
+.cv-entry:hover { background: var(--bg-line); }
+.cv-entry.is-dir { color: var(--fg); font-weight: 500; }
+.cv-size { font-size: 10px; color: var(--fg-mute); }
+
+.cv-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.cv-content-header {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--bg-line);
+  font-size: 10px;
+  color: var(--fg-mute);
+  flex-shrink: 0;
+  font-style: italic;
+}
+.cv-file-body {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 16px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.cv-tasks {
+  padding: 16px 20px;
+  overflow-y: auto;
+  max-height: 240px;
+  border-top: 1px solid var(--bg-line);
+}
+.cv-tasks h3 {
+  font-size: 11px;
+  color: var(--fg-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 0 0 10px;
+}

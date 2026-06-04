@@ -28,6 +28,7 @@
   <nav class="side">
     <a class="active" data-view="desk">desk</a>
     <a data-view="tasks">tasks</a>
+    <a data-view="computer">computer</a>
     <a data-view="watching">watching</a>
     <a data-view="approvals">approvals</a>
     <a data-view="chat">chat</a>
@@ -60,6 +61,14 @@
         <div class="list" id="tasksList"></div>
       </section>
 
+      <section class="zone" id="zone-computer">
+        <header>
+          <h2>computer</h2>
+          <span class="count" id="computerCount">0</span>
+        </header>
+        <div class="list" id="computerList"></div>
+      </section>
+
       <section class="zone" id="zone-watching">
         <header>
           <h2>watching</h2>
@@ -82,6 +91,28 @@
       <span><kbd>enter</kbd> send</span>
       <span><kbd>esc</kbd> clear</span>
     </div>
+  </div>
+</div>
+
+<div class="computer-view hidden" id="computerView">
+  <div class="cv-split">
+    <div class="cv-files">
+      <div class="cv-header">
+        <span id="cvPath">/home/user</span>
+        <button class="mini" id="cvUp">up</button>
+      </div>
+      <div class="cv-entries" id="cvEntries">
+        <div class="empty">select a path</div>
+      </div>
+    </div>
+    <div class="cv-content">
+      <div class="cv-content-header" id="cvFileHeader"></div>
+      <pre class="cv-file-body" id="cvFileBody"><span style="color:var(--fg-mute)">click a file to read it</span></pre>
+    </div>
+  </div>
+  <div class="cv-tasks">
+    <h3>computer tasks</h3>
+    <div id="cvTaskList"><div class="empty">no tasks yet</div></div>
   </div>
 </div>
 

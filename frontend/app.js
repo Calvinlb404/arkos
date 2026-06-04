@@ -39,10 +39,23 @@ let _lastRenderKey = '';
 const _dismissedTasks = new Set(JSON.parse(localStorage.getItem('ark_dismissed_tasks') || '[]'));
 const _resolvedPlans = new Set(JSON.parse(localStorage.getItem('ark_resolved_plans') || '[]'));
 
+// kind -> short icon for the activity stream
+const KIND_ICON = {
+  shell: '$', file: '▤', search: '◉', plan: '≡',
+  ask: '?', mcp: '⊕', completed: '✓', failed: '✗', start: '▶',
+};
+
 const state = {
   approvals: [],
   tasks: [],
   completed: [],
+  computerTasks: [],       // active + recent computer tasks
+  computerPath: '/home/user',
+  computerFiles: [],
+  computerFileContent: null,
+  computerFilePath: null,
+  computerExpandedTask: null,
+  computerTaskEvents: {},
   watching: [
     { id: 'w1', text: 'linear.app / team ark', when: 'every 5m' },
     { id: 'w2', text: 'mail.google.com / inbox', when: 'live' },
@@ -73,6 +86,9 @@ function render() {
     c: state.completed.map((x) => x.id),
     x: state.expandedTaskId,
     evLen: (state.taskEvents[state.expandedTaskId] || []).length,
+    ct: state.computerTasks.map((x) => x.task_id + '|' + x.status),
+    cx: state.computerExpandedTask,
+    cxLen: (state.computerTaskEvents[state.computerExpandedTask] || []).length,
   });
   if (key === _lastRenderKey) return;
   _lastRenderKey = key;
@@ -178,9 +194,12 @@ function render() {
     }
   }
 
+  renderComputerZone();
+
   document.getElementById('approvalsCount').textContent = state.approvals.length;
   document.getElementById('tasksCount').textContent = state.tasks.length;
   document.getElementById('watchingCount').textContent = state.watching.length;
+  document.getElementById('computerCount').textContent = state.computerTasks.filter((t) => t.status === 'running' || t.status === 'pending').length;
   document.getElementById('approvalsPill').textContent = state.approvals.length + ' pending';
 
   renderLog();
@@ -214,6 +233,163 @@ function renderEvents(taskId) {
     return `<div class="ev-row"><span class="ev-kind">${escapeHtml(e.kind)}</span>${escapeHtml(content)}</div>`;
   }).join('');
   return `<div class="task-events">${rows}</div>`;
+}
+
+// ---------- computer zone (on the desk) ----------
+function renderComputerZone() {
+  const el = document.getElementById('computerList');
+  const active = state.computerTasks.filter((t) => ['running','pending'].includes(t.status));
+  const recent = state.computerTasks.filter((t) => ['completed','failed'].includes(t.status));
+  if (!active.length && !recent.length) {
+    el.innerHTML = '<div class="empty">buddy\'s computer is idle</div>';
+    return;
+  }
+  el.innerHTML = '';
+  for (const t of active) {
+    const isExp = state.computerExpandedTask === t.task_id;
+    const evHtml = isExp ? renderComputerEvents(t.task_id) : '';
+    const row = document.createElement('div');
+    row.className = 'task-row' + (isExp ? ' expanded' : '');
+    row.innerHTML = `
+      <div class="row-top">
+        <div class="label">
+          <span class="spin computer-spin" title="using the computer"></span>
+          <span class="computer-tag">⬛ computer</span>
+          <span class="text">${escapeHtml((t.prompt || '').slice(0, 80))}</span>
+        </div>
+        <div class="row-actions">
+          <span class="when">${relTime(t.updated_at)}</span>
+          <button class="icon" data-cv-expand="${t.task_id}">${isExp ? '▾' : '▸'}</button>
+        </div>
+      </div>
+      ${evHtml}`;
+    el.appendChild(row);
+  }
+  for (const t of recent.slice(0, 3)) {
+    const row = document.createElement('div');
+    row.className = 'card';
+    const ok = t.status === 'completed';
+    row.innerHTML = `
+      <div class="meta">
+        <span class="tag" style="color:var(--${ok ? 'ok' : 'err'});border-color:var(--${ok ? 'ok' : 'err'})">${t.status}</span>
+        <span class="computer-tag">⬛ computer</span>
+        <span>${relTime(t.updated_at)} ago</span>
+      </div>
+      <div class="title">${escapeHtml((t.prompt || '').slice(0, 120))}</div>
+      ${t.summary ? `<div class="plan">${escapeHtml(t.summary.slice(0, 200))}</div>` : ''}`;
+    el.appendChild(row);
+  }
+}
+
+function renderComputerEvents(taskId) {
+  const evs = state.computerTaskEvents[taskId] || [];
+  if (!evs.length) return `<div class="task-events">(no events yet)</div>`;
+  const rows = evs.slice(-20).map((e) => {
+    const icon = KIND_ICON[e.kind] || '·';
+    const content = (e.content || '').slice(0, 200);
+    return `<div class="ev-row"><span class="ev-kind">${escapeHtml(icon)} ${escapeHtml(e.kind)}</span>${escapeHtml(content)}</div>`;
+  }).join('');
+  return `<div class="task-events">${rows}</div>`;
+}
+
+// ---------- computer full view (the tab) ----------
+function renderComputerView() {
+  const taskList = document.getElementById('cvTaskList');
+  if (!state.computerTasks.length) {
+    taskList.innerHTML = '<div class="empty">no tasks yet. ask buddy to write some code.</div>';
+  } else {
+    taskList.innerHTML = '';
+    for (const t of state.computerTasks) {
+      const ok = t.status === 'completed';
+      const running = ['running','pending'].includes(t.status);
+      const el = document.createElement('div');
+      el.className = 'card';
+      const statusColor = running ? '' : (ok ? 'color:var(--ok);border-color:var(--ok)' : 'color:var(--err);border-color:var(--err)');
+      el.innerHTML = `
+        <div class="meta">
+          <span class="tag" style="${statusColor}">${running ? '<span class="spin" style="display:inline-block;margin-right:4px"></span>' : ''}${t.status}</span>
+          <span>${relTime(t.updated_at)} ago</span>
+        </div>
+        <div class="title">${escapeHtml((t.prompt || '').slice(0, 160))}</div>
+        ${t.summary ? `<div class="plan">${escapeHtml(t.summary.slice(0, 300))}</div>` : ''}
+        ${(t.outputs && t.outputs.length) ? `<div class="plan" style="font-family:monospace;font-size:10px">${t.outputs.map((p) => escapeHtml(p)).join(' ')}</div>` : ''}
+      `;
+      taskList.appendChild(el);
+    }
+  }
+
+  // filesystem
+  const entries = document.getElementById('cvEntries');
+  document.getElementById('cvPath').textContent = state.computerPath;
+  entries.innerHTML = '';
+  if (!state.computerFiles.length) {
+    entries.innerHTML = '<div class="empty">loading...</div>';
+  } else {
+    for (const f of state.computerFiles) {
+      const row = document.createElement('div');
+      row.className = 'cv-entry' + (f.is_dir ? ' is-dir' : '');
+      row.dataset.path = f.path;
+      row.dataset.isDir = f.is_dir ? '1' : '';
+      row.innerHTML = `<span>${f.is_dir ? '▶ ' : '  '}${escapeHtml(f.name)}</span><span class="cv-size">${f.is_dir ? '' : (f.size + 'b')}</span>`;
+      entries.appendChild(row);
+    }
+  }
+
+  const body = document.getElementById('cvFileBody');
+  const header = document.getElementById('cvFileHeader');
+  if (state.computerFileContent !== null) {
+    header.textContent = state.computerFilePath || '';
+    body.textContent = state.computerFileContent;
+  }
+}
+
+async function browseFiles(path) {
+  state.computerPath = path || '/home/user';
+  state.computerFiles = [];
+  renderComputerView();
+  try {
+    const r = await fetch(`${CONFIG.backend}/computer/files?path=${encodeURIComponent(state.computerPath)}`, {
+      headers: authHeaders(),
+    });
+    if (!r.ok) return;
+    const j = await r.json();
+    state.computerFiles = j.entries || [];
+    renderComputerView();
+  } catch (err) { console.warn('browseFiles', err); }
+}
+
+async function readComputerFile(path) {
+  try {
+    const r = await fetch(`${CONFIG.backend}/computer/file?path=${encodeURIComponent(path)}`, {
+      headers: authHeaders(),
+    });
+    if (!r.ok) return;
+    const j = await r.json();
+    state.computerFileContent = j.content + (j.truncated ? '\n... (truncated)' : '');
+    state.computerFilePath = path;
+    renderComputerView();
+  } catch (err) { console.warn('readComputerFile', err); }
+}
+
+async function refreshComputerTasks() {
+  if (!CONFIG.token) return;
+  try {
+    const r = await fetch(`${CONFIG.backend}/computer/tasks`, { headers: authHeaders() });
+    if (!r.ok) return;
+    const j = await r.json();
+    state.computerTasks = j.tasks || [];
+    // Load events for any expanded task.
+    if (state.computerExpandedTask) {
+      const er = await fetch(
+        `${CONFIG.backend}/computer/tasks/${encodeURIComponent(state.computerExpandedTask)}/events`,
+        { headers: authHeaders() }
+      );
+      if (er.ok) {
+        const ej = await er.json();
+        state.computerTaskEvents[state.computerExpandedTask] = ej.events || [];
+      }
+    }
+  } catch (err) { console.warn('refreshComputerTasks', err); }
 }
 
 function escapeHtml(s) {
@@ -354,6 +530,26 @@ document.addEventListener('click', async (e) => {
     return;
   }
 
+  // computer task expand
+  const cvExpand = e.target.closest('[data-cv-expand]');
+  if (cvExpand) {
+    const id = cvExpand.dataset.cvExpand;
+    state.computerExpandedTask = state.computerExpandedTask === id ? null : id;
+    if (state.computerExpandedTask) {
+      const er = await fetch(
+        `${CONFIG.backend}/computer/tasks/${encodeURIComponent(id)}/events`,
+        { headers: authHeaders() }
+      );
+      if (er.ok) {
+        const ej = await er.json();
+        state.computerTaskEvents[id] = ej.events || [];
+      }
+    }
+    _lastRenderKey = '';
+    render();
+    return;
+  }
+
   // task row controls
   const rowCancel = e.target.closest('[data-task-cancel]');
   const rowExpand = e.target.closest('[data-task-expand]');
@@ -391,6 +587,23 @@ async function loadTaskEvents(taskId) {
     console.warn('loadTaskEvents error', err);
   }
 }
+
+// filesystem navigation
+document.getElementById('cvEntries').addEventListener('click', async (e) => {
+  const row = e.target.closest('.cv-entry');
+  if (!row) return;
+  if (row.dataset.isDir) {
+    await browseFiles(row.dataset.path);
+  } else {
+    await readComputerFile(row.dataset.path);
+  }
+});
+
+document.getElementById('cvUp').addEventListener('click', async () => {
+  const parts = state.computerPath.split('/').filter(Boolean);
+  parts.pop();
+  await browseFiles('/' + parts.join('/') || '/');
+});
 
 document.getElementById('themeToggle').addEventListener('click', () => {
   const cur = document.documentElement.getAttribute('data-theme');
@@ -590,23 +803,34 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// side nav scrolls to zone
+// side nav routing
 document.querySelectorAll('nav.side a[data-view]').forEach((a) => {
   a.addEventListener('click', () => {
     document.querySelectorAll('nav.side a').forEach((x) => x.classList.remove('active'));
     a.classList.add('active');
     const view = a.dataset.view;
-    if (view === 'chat') {
-      document.getElementById('drawer').classList.add('open');
-      input.focus();
-    } else if (view === 'approvals') {
-      document.getElementById('zone-approvals').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    } else if (view === 'tasks') {
-      document.getElementById('zone-tasks').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    } else if (view === 'watching') {
-      document.getElementById('zone-watching').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const main = document.getElementById('main');
+    const cv = document.getElementById('computerView');
+    if (view === 'computer') {
+      main.style.display = 'none';
+      cv.classList.remove('hidden');
+      browseFiles(state.computerPath);
+      renderComputerView();
     } else {
-      document.getElementById('main').scrollTo({ top: 0, behavior: 'smooth' });
+      main.style.display = '';
+      cv.classList.add('hidden');
+      if (view === 'chat') {
+        document.getElementById('drawer').classList.add('open');
+        input.focus();
+      } else if (view === 'approvals') {
+        document.getElementById('zone-approvals').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else if (view === 'tasks') {
+        document.getElementById('zone-tasks').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else if (view === 'watching') {
+        document.getElementById('zone-watching').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else {
+        main.scrollTo({ top: 0, behavior: 'smooth' });
+      }
     }
   });
 });
@@ -768,7 +992,12 @@ document.getElementById('loginUser').addEventListener('keydown', (e) => {
   const ok = await ensureAuthed();
   if (ok) {
     await refreshTasks();
-    setInterval(refreshTasks, 6000);
+    await refreshComputerTasks();
+    setInterval(async () => {
+      await refreshTasks();
+      await refreshComputerTasks();
+      render();
+    }, 6000);
   }
 })();
 
