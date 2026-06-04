@@ -155,8 +155,11 @@ class ComputerAgent:
                 return {"status": "completed", "summary": summary, "outputs": outputs}
 
             # Append the assistant turn and execute all tool calls.
-            msg_dict: dict[str, Any] = {
+            # Always include "content" key even if None -- omitting it causes a
+            # 500 on SGLang when tool_calls are present (chat template requires it).
+            messages.append({
                 "role": "assistant",
+                "content": assistant_msg.content or None,
                 "tool_calls": [
                     {
                         "id": tc.id,
@@ -165,10 +168,7 @@ class ComputerAgent:
                     }
                     for tc in assistant_msg.tool_calls
                 ],
-            }
-            if assistant_msg.content:
-                msg_dict["content"] = assistant_msg.content
-            messages.append(msg_dict)
+            })
 
             tool_results = []
             for tc in assistant_msg.tool_calls:
