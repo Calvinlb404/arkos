@@ -154,6 +154,12 @@ async def _inject_chat_message(
         )
 
 
+# Strong references to in-flight tasks. asyncio only holds weak refs to tasks,
+# so without this a fire-and-forget task can be garbage-collected mid-run (a
+# silent hang). Tasks remove themselves on completion.
+_INFLIGHT: set = set()
+
+
 def spawn(
     task_id: str,
     user_id: str,
@@ -165,8 +171,13 @@ def spawn(
     Fire-and-forget: schedule run_computer_task on the running event loop.
     Returns immediately so the HTTP handler can respond to the user.
     """
-    loop = asyncio.get_event_loop()
-    loop.create_task(
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    t = loop.create_task(
         run_computer_task(task_id, user_id, chat_session_id, prompt, tool_manager),
         name=f"computer_task_{task_id[:8]}",
     )
+    _INFLIGHT.add(t)
+    t.add_done_callback(_INFLIGHT.discard)

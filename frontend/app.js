@@ -371,7 +371,7 @@ async function refreshComputerTasks() {
     if (!r.ok) return;
     const j = await r.json();
     state.computerTasks = j.tasks || [];
-    // Load events for any expanded task.
+    // Load events for any expanded task (Computer tab).
     if (state.computerExpandedTask) {
       const er = await fetch(
         `${CONFIG.backend}/computer/tasks/${encodeURIComponent(state.computerExpandedTask)}/events`,
@@ -382,7 +382,83 @@ async function refreshComputerTasks() {
         state.computerTaskEvents[state.computerExpandedTask] = ej.events || [];
       }
     }
+    // Surface tasks dispatched this session into the chat so the user sees
+    // progress + result without leaving the conversation.
+    for (const t of state.computerTasks) surfaceComputerTask(t);
   } catch (err) { console.warn('refreshComputerTasks', err); }
+}
+
+// ---------- surface computer tasks into the chat log ----------
+const _appStartTime = Date.now();
+const _surfaced = new Map();  // task_id -> history index
+
+function surfaceComputerTask(task) {
+  if (_surfaced.has(task.task_id)) return;
+  // Only surface tasks created this session (don't dump history on load).
+  if (new Date(task.created_at).getTime() < _appStartTime - 3000) {
+    _surfaced.set(task.task_id, -1);
+    return;
+  }
+  const idx = state.history.length;
+  _surfaced.set(task.task_id, idx);
+  document.getElementById('drawer').classList.add('open');  // open the log so it's visible
+  if (['completed', 'failed'].includes(task.status)) {
+    state.history.push({ role: 'ark', content: computerResultText(task) });
+    renderLog();
+  } else {
+    state.history.push({ role: 'ark', content: '⬛ working on your computer…', live: true });
+    renderLog();
+    pollComputerTaskIntoChat(task.task_id, idx);
+  }
+}
+
+function computerResultText(t) {
+  const ok = t.status === 'completed';
+  let txt = (ok ? '✓ ' : '✗ ') + (t.summary || t.error || 'done');
+  if (t.outputs && t.outputs.length) {
+    txt += '\n\n' + t.outputs.map((p) => '`' + p + '`').join(' ');
+  }
+  return txt;
+}
+
+async function pollComputerTaskIntoChat(taskId, idx) {
+  let lastEv = 0;
+  const tick = async () => {
+    let latest = null;
+    try {
+      const er = await fetch(
+        `${CONFIG.backend}/computer/tasks/${encodeURIComponent(taskId)}/events?after=${lastEv}`,
+        { headers: authHeaders() });
+      if (er.ok) {
+        const ej = await er.json();
+        for (const e of (ej.events || [])) { lastEv = e.event_id; latest = e; }
+      }
+    } catch {}
+    let t = null;
+    try {
+      const tr = await fetch(`${CONFIG.backend}/computer/tasks/${encodeURIComponent(taskId)}`,
+        { headers: authHeaders() });
+      if (tr.ok) t = await tr.json();
+    } catch {}
+    if (t && ['completed', 'failed'].includes(t.status)) {
+      state.history[idx] = { role: 'ark', content: computerResultText(t) };
+      renderLog();
+      // If the computer tab is open, refresh the filesystem so new files show.
+      if (computerPageVisible()) browseFiles(state.computerPath);
+      await refreshComputerTasks();
+      return;  // stop polling
+    }
+    // live activity line
+    let act = 'starting…';
+    if (latest) {
+      const icon = KIND_ICON[latest.kind] || '·';
+      act = `${icon} ${latest.kind}${latest.content ? ': ' + latest.content.slice(0, 70) : ''}`;
+    }
+    state.history[idx] = { role: 'ark', content: '⬛ computer • ' + act, live: true };
+    renderLog();
+    setTimeout(tick, 1500);
+  };
+  tick();
 }
 
 function escapeHtml(s) {
@@ -597,6 +673,13 @@ document.getElementById('cvUp').addEventListener('click', async () => {
   parts.pop();
   await browseFiles('/' + parts.join('/') || '/');
 });
+
+document.getElementById('cvRefresh').addEventListener('click', () => browseFiles(state.computerPath));
+
+function computerPageVisible() {
+  const cp = document.getElementById('computerPage');
+  return cp && !cp.classList.contains('hidden');
+}
 
 document.getElementById('themeToggle').addEventListener('click', () => {
   const cur = document.documentElement.getAttribute('data-theme');
