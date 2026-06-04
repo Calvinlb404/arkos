@@ -31,9 +31,10 @@ from state_module.core.state_registry import register_state
 
 
 class _Route(StrEnum):
-    reply = "reply"  # stay in chat; answer in final
-    ask = "ask"  # stay in chat; ask a clarifying question
-    plan = "plan"  # hand off to workshop_plan
+    reply = "reply"        # stay in chat; answer in final
+    ask = "ask"            # stay in chat; ask a clarifying question
+    plan = "plan"          # hand off to workshop_plan (multi-step approval flow)
+    computer = "computer"  # dispatch to the persistent computer (file/code/run tasks)
 
 
 class ReasonedOutput(BaseModel):
@@ -84,15 +85,17 @@ class StateAI(State):
             "Read the user's latest message and pick a route:\n"
             "  - reply: answer them in chat. This is the default.\n"
             "  - ask:   ask ONE clarifying question if you need more info.\n"
-            "  - plan:  ONLY when the user has explicitly asked you to DO a concrete, "
-            "multi-step action (create, send, schedule, update, etc) on an external "
-            "system where the target of the action is already clear.\n"
+            "  - plan:  ONLY when the user wants a multi-step action on an EXTERNAL SERVICE "
+            "(calendar, linear, etc.) where approval is needed before acting.\n"
+            "  - computer: when the user wants to write or run code, edit files, build "
+            "something, do research that involves running commands, or any task that needs "
+            "a real computer (filesystem + shell). The computer agent will handle it "
+            "autonomously and message back when done.\n"
             "\n"
-            "Workshop ideas in chat FIRST. Never jump to plan just because the user "
-            "mentioned an external system. If they say 'check my linear tickets', answer "
-            "in chat using the tools you have; do NOT write a plan for a single tool call. "
-            "If you truly do not have a tool that would help, say so plainly and ask the "
-            "user what they'd like to do instead (route=ask).\n"
+            "Workshop ideas in chat FIRST. Never jump to plan or computer just because the "
+            "user mentioned a system. If they say 'check my linear tickets', answer in chat "
+            "using tools you have. Use computer for genuine file/code/run work. "
+            "If you truly cannot help, say so and ask (route=ask).\n"
             "\n"
             "Put your reasoning in `approach`. The user will NEVER see it. Only `final` "
             "is shown. Do not paraphrase your reasoning into the final message."
@@ -129,6 +132,8 @@ class StateAI(State):
         user_text = (data.final or "").strip() or "(no content)"
 
         signal = "needs_input" if data.route == _Route.ask else "complete"
+        if data.route == _Route.computer:
+            signal = "complete"
 
         return StateOutput(
             content=user_text,

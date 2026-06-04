@@ -11,11 +11,17 @@ states:
     description: "state used for your reasoning and simple replies that do not require action"
     type: agent
     transition:
-      next: [ask_user, use_tool, workshop_plan]
+      next: [ask_user, use_tool, workshop_plan, computer_dispatch]
 
   workshop_plan:
-    description: "state used when the user wants buddy to DO something. buddy drafts a plan and waits for approval on the dashboard. choose this whenever action on external systems, files, or websites is implied."
+    description: "state used when the user wants buddy to DO something on an external service (calendar, linear, etc). buddy drafts a plan and waits for approval."
     type: plan
+    transition:
+      next: [ask_user]
+
+  computer_dispatch:
+    description: "dispatch a task to the user's persistent computer (write/run code, edit files, build things). returns immediately and messages back when done."
+    type: computer_dispatch
     transition:
       next: [ask_user]
 
