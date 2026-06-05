@@ -122,12 +122,21 @@ class SandboxManager:
         async with self._lock(user_id):
             cached = self._live.get(user_id)
             if cached is not None:
-                return cached
+                # Validate + keep alive in one call: set_timeout pings the sandbox
+                # and resets its idle timer. If e2b already reaped it (idle past
+                # the timeout), this raises -- evict the dead handle and recreate.
+                try:
+                    await asyncio.to_thread(cached.set_timeout, _sbx_timeout())
+                    return cached
+                except Exception as e:
+                    logger.warning("cached sandbox for user %s is gone (%s); recreating", user_id, e)
+                    self._live.pop(user_id, None)
 
             row = await asyncio.to_thread(_db_get_row, user_id)
             if row:
                 try:
                     sbx = await asyncio.to_thread(Sandbox.connect, row["e2b_sandbox_id"])
+                    await asyncio.to_thread(sbx.set_timeout, _sbx_timeout())
                     self._live[user_id] = sbx
                     await asyncio.to_thread(_db_set_status, user_id, "active")
                     logger.info("resumed sandbox %s for user %s", row["e2b_sandbox_id"], user_id)

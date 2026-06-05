@@ -210,6 +210,48 @@ class TestDispatchErrorHandling:
 
 
 # ---------------------------------------------------------------------------
+# sandbox manager -- stale-handle recovery
+# ---------------------------------------------------------------------------
+
+
+class TestSandboxManagerRecovery:
+    @pytest.mark.asyncio
+    async def test_dead_cached_handle_is_recreated(self):
+        """A reaped sandbox (set_timeout raises) is evicted and replaced, not returned."""
+        from computer_module.sandbox import SandboxManager
+
+        mgr = SandboxManager()
+        dead = MagicMock()
+        dead.set_timeout.side_effect = Exception("The sandbox was not found")
+        mgr._live["u1"] = dead
+        fresh = MagicMock(sandbox_id="fresh-sbx")
+        mgr._create = MagicMock(return_value=fresh)
+
+        with patch("computer_module.sandbox._db_get_row", return_value=None), \
+             patch("computer_module.sandbox._db_upsert"):
+            sbx = await mgr.get_or_create("u1")
+
+        assert sbx is fresh
+        assert mgr._live["u1"] is fresh
+        dead.set_timeout.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_live_cached_handle_is_kept_alive(self):
+        """A healthy cached handle is reused, and its idle timer is refreshed."""
+        from computer_module.sandbox import SandboxManager
+
+        mgr = SandboxManager()
+        alive = MagicMock(sandbox_id="sbx-live")
+        mgr._live["u1"] = alive
+        mgr._create = MagicMock(side_effect=AssertionError("should not create a new sandbox"))
+
+        sbx = await mgr.get_or_create("u1")
+
+        assert sbx is alive
+        alive.set_timeout.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # agent -- loop behaviour
 # ---------------------------------------------------------------------------
 
