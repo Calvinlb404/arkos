@@ -20,8 +20,10 @@ function ApprovalCard({ item, onResolve }) {
   const [noteOpen, setNoteOpen] = useState(false);
   const [gone, setGone] = useState(false);
   const ref = useRef(null);
+  const noteRef = useRef(null);
 
   function resolve(verb) {
+    const note = noteRef.current ? noteRef.current.value.trim() : "";
     if (ref.current) {
       ref.current.style.transition = "opacity .35s, transform .35s, margin .35s, max-height .35s, padding .35s, border-color .35s";
       ref.current.style.maxHeight = ref.current.offsetHeight + "px";
@@ -36,8 +38,11 @@ function ApprovalCard({ item, onResolve }) {
       });
     }
     setGone(true);
-    setTimeout(() => onResolve(item.id, verb), 360);
+    setTimeout(() => onResolve(item.id, verb, note), 360);
   }
+
+  const plan = item.plan || [];
+  const tools = item.tools || [];
 
   return (
     <div className="card approval" ref={ref} style={{ overflow: "hidden" }}>
@@ -46,14 +51,19 @@ function ApprovalCard({ item, onResolve }) {
         <span className="tag accent">{item.tag}</span>
       </div>
       <div className="title">{item.title}</div>
-      <div className="body">{item.body}</div>
-      <div className="plan">
-        <ol>{item.plan.map((p, i) => <li key={i}>{p}</li>)}</ol>
-        <div className="toolrow">
-          {item.tools.map((t) => <span className="chip" key={t}>{t}</span>)}
+      {item.body && <div className="body">{item.body}</div>}
+      {(plan.length > 0 || tools.length > 0) && (
+        <div className="plan">
+          {plan.length > 0 && <ol>{plan.map((p, i) => <li key={i}>{p}</li>)}</ol>}
+          {tools.length > 0 && (
+            <div className="toolrow">
+              {tools.map((t) => <span className="chip" key={t}>{t}</span>)}
+            </div>
+          )}
         </div>
-      </div>
+      )}
       <textarea
+        ref={noteRef}
         className={"note" + (noteOpen ? " open" : "")}
         placeholder="add a note or tweak before approving…"
       />
