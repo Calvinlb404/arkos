@@ -223,6 +223,15 @@ const api = {
     } catch { return []; }
   },
 
+  async computerEvents(id) {
+    try {
+      const r = await fetch(`${CONFIG.backend}/computer/tasks/${encodeURIComponent(id)}/events`, { headers: authHeaders() });
+      if (!r.ok) return [];
+      const j = await r.json();
+      return j.events || [];
+    } catch { return []; }
+  },
+
   async computerFiles(path) {
     const r = await fetch(`${CONFIG.backend}/computer/files?path=${encodeURIComponent(path)}`, { headers: authHeaders() });
     if (!r.ok) throw new Error("files " + r.status);

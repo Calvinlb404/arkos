@@ -19,6 +19,19 @@ function shapeTask(t, events) {
   };
 }
 
+/* a computer task is just a task — shape it identically so it renders in the
+   same list / TaskRow with the same expandable event log. */
+function shapeComputerTask(t, events) {
+  return {
+    id: t.task_id,
+    state: t.status === "completed" ? "done" : (t.status === "failed" ? "stop" : "run"),
+    when: relTime(t.updated_at) || "running",
+    text: t.prompt || "task",
+    src: t.status,
+    events: (events || []).map((e) => ({ k: e.kind, t: (e.content || "").slice(0, 240) })),
+  };
+}
+
 function shapeApproval(a) {
   return {
     id: a.approval_id,
@@ -122,7 +135,16 @@ function App() {
     const rawTasks = [...(running.tasks || []), ...(waiting.tasks || [])];
     // pull events for each live task so the expandable log is real
     const eventsList = await Promise.all(rawTasks.map((t) => api.taskEvents(t.task_id)));
-    const tasks = rawTasks.map((t, i) => shapeTask(t, eventsList[i]));
+
+    // computer tasks are tasks too — fold the active ones into the same list,
+    // with their event log, so they show in Desk/Tasks like any other task
+    const activeComputer = (computerTasks || []).filter((t) => !["completed", "failed", "cancelled"].includes(t.status));
+    const compEvents = await Promise.all(activeComputer.map((t) => api.computerEvents(t.task_id)));
+
+    const tasks = [
+      ...rawTasks.map((t, i) => shapeTask(t, eventsList[i])),
+      ...activeComputer.map((t, i) => shapeComputerTask(t, compEvents[i])),
+    ];
     const approvals = approvalsRaw.map(shapeApproval);
 
     setData((d) => ({ ...d, online, tasks, approvals, computerTasks }));
