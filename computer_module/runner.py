@@ -49,13 +49,16 @@ async def run_computer_task(
 
     async def ask(prompt: str) -> str:
         """
-        Create an approval row, surface it in the existing tray, and poll
-        until the user responds. Reuses the task_approvals table so the
-        'Pending Approvals' UI works for computer tasks too.
+        Create an approval row, surface it in the Pending Approvals tray, and
+        poll until the user responds. Now that computer tasks live in `tasks`,
+        the approval JOINs cleanly and the existing tray works for them too.
+        The approval's user_id must be the UUID (the tasks/approvals keyspace),
+        while the sandbox/Memory keyspaces keep the raw sub.
         """
-        from base_module.task_store import create_approval, get_approval
-        approval_id = create_approval(task_id, user_id, "text", prompt)
+        from base_module.task_store import _user_uuid, create_approval, get_approval
+        approval_id = create_approval(task_id, str(_user_uuid(user_id)), "text", prompt)
         emit({"kind": "ask", "prompt": prompt, "approval_id": approval_id})
+        set_computer_status(task_id, "awaiting_approval")  # render as "waiting on you"
         poll_interval = 2.0
         timeout = 86400  # 24h
         elapsed = 0.0
@@ -64,7 +67,9 @@ async def run_computer_task(
             elapsed += poll_interval
             row = get_approval(approval_id)
             if row and row["status"] not in ("pending",):
+                set_computer_status(task_id, "running")
                 return row.get("response_text") or ("approved" if row.get("response_bool") else "declined")
+        set_computer_status(task_id, "running")
         return "(ask timed out)"
 
     agent = ComputerAgent(

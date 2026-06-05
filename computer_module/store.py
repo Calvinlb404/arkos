@@ -1,43 +1,88 @@
 """
-Persistence helpers for computer_tasks and computer_task_events.
+Persistence for computer tasks. As of migration 0007 these are rows in the
+shared `tasks` table with agent_kind='computer' (events in task_events,
+approvals in task_approvals) -- one task backbone, not a separate table.
 
-All reads are scoped by user_id so one user cannot access another's tasks.
-Mirrors the style of base_module/task_store.py.
+This module keeps the create_computer_task/.../list_computer_events surface so
+the runner and router are unchanged; it projects the computer-shaped fields
+(prompt/summary/error/outputs/chat_session_id) in and out of context_payload.
+All reads are user-scoped. Does NOT run the agent or make routing decisions.
 """
 
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 import psycopg2
 import psycopg2.extras
 
+from base_module.task_store import (
+    _user_uuid,
+    list_events,
+    log_event,
+    mark_task_completed,
+    mark_task_failed,
+    set_task_status,
+)
 from config_module.loader import config
+
+_AGENT_KIND = "computer"
 
 
 def _connect():
     return psycopg2.connect(config.get("database.url"))
 
 
-# ---------- computer_tasks --------------------------------------------------
+def _project(row: dict[str, Any]) -> dict[str, Any]:
+    """Shape a tasks row (agent_kind='computer') into the computer-task dict the
+    router's _serialize_task expects."""
+    ctx = row.get("context_payload") or {}
+    if isinstance(ctx, str):
+        ctx = json.loads(ctx)
+    return {
+        "task_id": row["task_id"],
+        "user_id": row["user_id"],
+        "chat_session_id": ctx.get("chat_session_id", ""),
+        "prompt": ctx.get("prompt", ""),
+        "status": row["status"],
+        "summary": ctx.get("summary") or None,
+        "error": ctx.get("error") or None,
+        "outputs": ctx.get("outputs") or [],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
 
-def create_computer_task(
-    user_id: str,
-    chat_session_id: str,
-    prompt: str,
-) -> str:
-    """Insert a new task row (status=pending) and return the task_id."""
+
+# ---------- computer tasks (agent_kind='computer' rows in `tasks`) -----------
+
+def create_computer_task(user_id: str, chat_session_id: str, prompt: str) -> str:
+    """Insert a computer task row (status=pending) and return the task_id."""
+    payload = {
+        "title": prompt[:90],          # header for the unified list + approvals panel
+        "prompt": prompt,
+        "chat_session_id": chat_session_id,
+        "source": "computer",
+        "outputs": [],
+        "summary": "",
+        "error": "",
+    }
     conn = _connect()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO computer_tasks (user_id, chat_session_id, prompt)
-                VALUES (%s, %s, %s)
+                INSERT INTO tasks (user_id, status, agent_kind, session_id, context_payload)
+                VALUES (%s, 'pending', %s, %s, %s)
                 RETURNING task_id
                 """,
-                (user_id, chat_session_id, prompt),
+                (
+                    str(_user_uuid(user_id)),
+                    _AGENT_KIND,
+                    str(uuid.uuid4()),
+                    json.dumps(payload),
+                ),
             )
             task_id = str(cur.fetchone()[0])
             conn.commit()
@@ -54,48 +99,32 @@ def set_computer_status(
     error: str | None = None,
     outputs: list[str] | None = None,
 ) -> None:
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE computer_tasks
-                SET status = %s,
-                    summary = COALESCE(%s, summary),
-                    error   = COALESCE(%s, error),
-                    outputs = COALESCE(%s::jsonb, outputs),
-                    updated_at = now()
-                WHERE task_id = %s
-                """,
-                (
-                    status,
-                    summary,
-                    error,
-                    json.dumps(outputs) if outputs is not None else None,
-                    task_id,
-                ),
-            )
-            conn.commit()
-    finally:
-        conn.close()
+    """Update a computer task's status. Terminal states route through the shared
+    task_store helpers so summary/error/outputs land in context_payload."""
+    if status == "completed":
+        mark_task_completed(task_id, summary, outputs)
+    elif status == "failed":
+        mark_task_failed(task_id, error or "", outputs)
+    else:
+        set_task_status(task_id, status)
 
 
 def get_computer_task(task_id: str, user_id: str) -> dict[str, Any] | None:
-    """Return the task row scoped to user_id, or None if not found / wrong user."""
+    """Return the computer task scoped to user_id (and agent_kind), or None.
+    Self-scoped because task_store.get_task is not user-scoped."""
     conn = _connect()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT task_id, user_id, chat_session_id, prompt,
-                       status, summary, error, outputs, created_at, updated_at
-                FROM computer_tasks
-                WHERE task_id = %s AND user_id = %s
+                SELECT task_id, user_id, status, context_payload, created_at, updated_at
+                FROM tasks
+                WHERE task_id = %s AND user_id = %s AND agent_kind = %s
                 """,
-                (task_id, user_id),
+                (task_id, str(_user_uuid(user_id)), _AGENT_KIND),
             )
             row = cur.fetchone()
-            return dict(row) if row else None
+            return _project(dict(row)) if row else None
     finally:
         conn.close()
 
@@ -106,21 +135,20 @@ def list_computer_tasks(user_id: str, limit: int = 20) -> list[dict[str, Any]]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT task_id, user_id, chat_session_id, prompt,
-                       status, summary, error, outputs, created_at, updated_at
-                FROM computer_tasks
-                WHERE user_id = %s
+                SELECT task_id, user_id, status, context_payload, created_at, updated_at
+                FROM tasks
+                WHERE user_id = %s AND agent_kind = %s
                 ORDER BY created_at DESC
                 LIMIT %s
                 """,
-                (user_id, limit),
+                (str(_user_uuid(user_id)), _AGENT_KIND, limit),
             )
-            return [dict(r) for r in cur.fetchall()]
+            return [_project(dict(r)) for r in cur.fetchall()]
     finally:
         conn.close()
 
 
-# ---------- computer_task_events --------------------------------------------
+# ---------- events (shared task_events) --------------------------------------
 
 def log_computer_event(
     task_id: str,
@@ -128,23 +156,8 @@ def log_computer_event(
     content: str = "",
     payload: dict[str, Any] | None = None,
 ) -> int:
-    """Append an event row and return the event_id."""
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO computer_task_events (task_id, kind, content, payload)
-                VALUES (%s, %s, %s, %s)
-                RETURNING event_id
-                """,
-                (task_id, kind, content, json.dumps(payload or {})),
-            )
-            event_id = cur.fetchone()[0]
-            conn.commit()
-            return event_id
-    finally:
-        conn.close()
+    """Append an event and return the event_id."""
+    return log_event(task_id, kind, content, payload)
 
 
 def list_computer_events(
@@ -152,20 +165,5 @@ def list_computer_events(
     user_id: str,
     after_id: int = 0,
 ) -> list[dict[str, Any]]:
-    """Events for a task, guarded by user ownership."""
-    conn = _connect()
-    try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT e.event_id, e.kind, e.content, e.payload, e.created_at
-                FROM computer_task_events e
-                JOIN computer_tasks t ON t.task_id = e.task_id
-                WHERE e.task_id = %s AND t.user_id = %s AND e.event_id > %s
-                ORDER BY e.event_id ASC
-                """,
-                (task_id, user_id, after_id),
-            )
-            return [dict(r) for r in cur.fetchall()]
-    finally:
-        conn.close()
+    """Events for a task, guarded by user ownership (via the shared join)."""
+    return list_events(task_id, str(_user_uuid(user_id)), after_id)

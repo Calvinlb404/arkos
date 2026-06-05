@@ -421,6 +421,47 @@ class TestComputerStore:
             result = get_computer_task("some-task-id", "wrong-user")
         assert result is None
 
+    def test_create_inserts_computer_agent_kind(self):
+        """create_computer_task must write a tasks row with agent_kind='computer'."""
+        import uuid
+
+        from computer_module.store import create_computer_task
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+        mock_cur.__exit__ = MagicMock(return_value=False)
+        mock_cur.fetchone.return_value = (uuid.uuid4(),)
+        mock_conn.cursor.return_value = mock_cur
+
+        with patch("computer_module.store._connect", return_value=mock_conn):
+            create_computer_task("11111111-1111-1111-1111-111111111111", "sess", "do it")
+        sql, params = mock_cur.execute.call_args[0]
+        assert "INSERT INTO tasks" in sql
+        assert "computer" in params  # agent_kind value
+
+    def test_get_filters_by_agent_kind(self):
+        """get_computer_task scopes to agent_kind='computer' (not just task_id/user)."""
+        from computer_module.store import get_computer_task
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+        mock_cur.__exit__ = MagicMock(return_value=False)
+        mock_cur.fetchone.return_value = None
+        mock_conn.cursor.return_value = mock_cur
+
+        with patch("computer_module.store._connect", return_value=mock_conn):
+            get_computer_task("t", "11111111-1111-1111-1111-111111111111")
+        sql, params = mock_cur.execute.call_args[0]
+        assert "agent_kind = %s" in sql
+        assert "computer" in params
+
+    def test_set_completed_writes_outputs_to_payload(self):
+        """set_computer_status(completed) routes through mark_task_completed with outputs."""
+        from computer_module import store
+        with patch.object(store, "mark_task_completed") as mock_done:
+            store.set_computer_status("t", "completed", summary="ok", outputs=["/a.txt"])
+        mock_done.assert_called_once_with("t", "ok", ["/a.txt"])
+
 
 # ---------------------------------------------------------------------------
 # router -- endpoints (mock sandbox + store)

@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 from base_module import task_runner
 from base_module.jwt_utils import CurrentUser
 from base_module.task_store import (
+    _user_uuid,
     list_events,
     list_pending_approvals,
     resolve_approval,
@@ -159,12 +160,7 @@ def _row_to_response(row: dict[str, Any]) -> TaskResponse:
     )
 
 
-def _user_uuid(user_id_str: str) -> uuid.UUID:
-    """Parse the JWT sub (user_id) into a UUID. Demo fallback tolerates non-uuid strings by hashing."""
-    try:
-        return uuid.UUID(user_id_str)
-    except (ValueError, TypeError):
-        return uuid.uuid5(uuid.NAMESPACE_URL, f"ark-legacy:{user_id_str}")
+# _user_uuid now lives in base_module.task_store (shared user_id -> tasks DB boundary)
 
 
 # ---------- create + list + get -------------------------------------------
