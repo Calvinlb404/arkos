@@ -275,7 +275,7 @@ const api = {
 
   /* streaming chat. `messages` is the OpenAI-style history; onDelta(textChunk)
      fires for each token. Resolves with the full reply text. */
-  async chatStream(messages, onDelta) {
+  async chatStream(messages, onDelta, onStatus) {
     const res = await fetch(CONFIG.backend + "/v1/chat/completions", {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json", "X-User-ID": CONFIG.userId }),
@@ -298,8 +298,10 @@ const api = {
         if (payload === "[DONE]") continue;
         try {
           const j = JSON.parse(payload);
-          const delta = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
-          if (delta) { reply += delta; onDelta && onDelta(reply); }
+          const d = j.choices && j.choices[0] && j.choices[0].delta;
+          if (!d) continue;
+          if (d.content) { reply += d.content; onDelta && onDelta(reply); }
+          else if (d.ark_status) { onStatus && onStatus(d.ark_status); }   // buddy's live activity
         } catch {}
       }
     }

@@ -202,10 +202,17 @@ function App() {
 
     let reply = "";
     try {
-      reply = await api.chatStream(history, (full) => {
-        // strip the ark-plan fence live so the floater never shows raw json
-        setFloaters((f) => f.map((x) => x.id === rId ? { ...x, text: parsePlan(full).text } : x));
-      });
+      reply = await api.chatStream(
+        history,
+        (full) => {
+          // strip the ark-plan fence live so the floater never shows raw json
+          setFloaters((f) => f.map((x) => x.id === rId ? { ...x, text: parsePlan(full).text } : x));
+        },
+        (status) => {
+          // buddy's live activity (thinking / drafting a plan) shown until text arrives
+          setFloaters((f) => f.map((x) => x.id === rId ? { ...x, status } : x));
+        },
+      );
     } catch (err) {
       reply = "[buddy offline: " + (err.message || err) + "]";
       setFloaters((f) => f.map((x) => x.id === rId ? { ...x, text: reply } : x));
@@ -322,7 +329,11 @@ function App() {
             {floaters.map((f) => (
               <div className={"floater" + (f.fold ? " fold" : "")} key={f.id}>
                 <span className="who">{f.who}</span>
-                {f.text}
+                {(f.text && f.text !== "…")
+                  ? f.text
+                  : (f.status
+                      ? <span className="mute"><span className="spin" style={{ marginRight: 8, verticalAlign: "-1px" }} />{f.status}…</span>
+                      : f.text)}
               </div>
             ))}
           </div>

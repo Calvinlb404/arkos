@@ -446,13 +446,32 @@ class Agent:
 
         retry_count = 0
 
+        # Map the active state to a short activity label so the UI can show a
+        # live status line instead of an opaque "…". Buddy chats and plans; it
+        # does NOT call tools (that's the subagent), so there is no "using a
+        # tool" label here -- tool activity is surfaced via the task event log.
+        _STATUS = {
+            "agent": "thinking",
+            "plan": "drafting a plan",
+            "computer_plan": "drafting a plan",
+            "user": "waiting for you",
+        }
+
+        def _status_for(state):
+            return (_STATUS.get(getattr(state, "type", ""))
+                    or _STATUS.get(getattr(state, "name", ""))
+                    or "working")
+
         while True:
             if retry_count > self.max_iter:
                 logger.warning("step_stream: max iterations (%d) reached", self.max_iter)
                 self.terminal_reason = TerminalReason.max_steps
-                yield "\n[Max iterations reached]"
+                yield {"type": "content", "text": "\n[Max iterations reached]"}
                 break
             retry_count += 1
+
+            # Announce what buddy is about to do; shows during slow model calls.
+            yield {"type": "status", "label": _status_for(self.current_state)}
 
             context = await self.get_context()
             update, retry_signal = await self._run_state(context)
@@ -466,7 +485,7 @@ class Agent:
                 if update.content:
                     await self.add_context([AIMessage(content=update.content)])
                     for char in update.content:
-                        yield char
+                        yield {"type": "content", "text": char}
 
             if update and update.completion_signal == "error" and not self.current_state.is_terminal:
                 self.current_state = self.flow.get_state("agent_reply")
@@ -493,7 +512,7 @@ class Agent:
                 self.current_state = self.flow.get_state(next_state_name)
 
                 if not self.current_state.is_terminal:
-                    yield "\n\n"
+                    yield {"type": "content", "text": "\n\n"}
             else:
                 self.terminal_reason = TerminalReason.needs_input
                 break

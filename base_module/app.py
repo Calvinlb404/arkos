@@ -555,6 +555,15 @@ async def chat_completions(request: Request, current: dict = CurrentUser):
             """Yield SSE chunks in OpenAI streaming format."""
             chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
             async for chunk in req_agent.step_stream(context_msgs, user_id=user_id):
+                # step_stream yields {"type": "content"|"status", ...}.
+                # Status events carry buddy's current activity (thinking / drafting
+                # a plan) as a non-OpenAI `ark_status` field the ark frontend reads.
+                if isinstance(chunk, dict) and chunk.get("type") == "status":
+                    delta = {"ark_status": chunk["label"]}
+                elif isinstance(chunk, dict):
+                    delta = {"content": chunk.get("text", "")}
+                else:
+                    delta = {"content": chunk}  # defensive: legacy str chunk
                 data = {
                     "id": chunk_id,
                     "object": "chat.completion.chunk",
@@ -563,7 +572,7 @@ async def chat_completions(request: Request, current: dict = CurrentUser):
                     "choices": [
                         {
                             "index": 0,
-                            "delta": {"content": chunk},
+                            "delta": delta,
                             "finish_reason": None,
                         }
                     ],
