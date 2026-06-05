@@ -99,7 +99,7 @@ function ApprovalsView({ data, onResolve }) {
 }
 
 /* ---------- CHAT ---------- */
-function ChatView({ data }) {
+function ChatView({ data, onApprovePlan, onDeclinePlan }) {
   return (
     <div className="view">
       <PageHead title="chat" lede="think out loud with buddy. it remembers, and turns the useful bits into standing rules." />
@@ -109,7 +109,16 @@ function ChatView({ data }) {
           : data.chat.map((m, i) => (
             <div className={"msg " + (m.who === "you" ? "user" : "buddy")} key={i}>
               <span className="who">{m.who === "you" ? (data.user || "you") : "buddy"}</span>
-              <span className="bubble">{m.text}</span>
+              {m.text && <span className="bubble">{m.text}</span>}
+              {m.plan && (
+                <PlanCard
+                  plan={m.plan}
+                  resolved={m.planResolved}
+                  error={m.planError}
+                  onApprove={() => onApprovePlan(m.plan, i)}
+                  onDecline={() => onDeclinePlan(i)}
+                />
+              )}
             </div>
           ))}
       </div>

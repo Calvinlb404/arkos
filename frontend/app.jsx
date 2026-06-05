@@ -181,14 +181,17 @@ function App() {
     let reply = "";
     try {
       reply = await api.chatStream(history, (full) => {
-        setFloaters((f) => f.map((x) => x.id === rId ? { ...x, text: full } : x));
+        // strip the ark-plan fence live so the floater never shows raw json
+        setFloaters((f) => f.map((x) => x.id === rId ? { ...x, text: parsePlan(full).text } : x));
       });
     } catch (err) {
       reply = "[buddy offline: " + (err.message || err) + "]";
       setFloaters((f) => f.map((x) => x.id === rId ? { ...x, text: reply } : x));
     }
 
-    setData((d) => ({ ...d, chat: [...d.chat, { who: "buddy", text: reply }] }));
+    // split any workshopped plan out of the reply into an approve card
+    const { text: clean, plan } = parsePlan(reply);
+    setData((d) => ({ ...d, chat: [...d.chat, { who: "buddy", text: clean || reply, plan }] }));
     // fold both away, then refresh state (a reply may have spawned tasks)
     setTimeout(() => {
       setFloaters((f) => f.map((x) => (x.id === id || x.id === rId) ? { ...x, fold: true } : x));
@@ -204,13 +207,38 @@ function App() {
     }
   }
 
+  /* ---- plan approval: nothing runs on the computer until this fires ---- */
+  async function approvePlan(plan, msgIndex) {
+    try {
+      if (plan.target === "computer") await api.dispatchComputer(plan.prompt || plan.title);
+      else await api.createTask(plan);
+      // mark the card resolved so it can't be double-submitted
+      setData((d) => ({
+        ...d,
+        chat: d.chat.map((m, i) => i === msgIndex ? { ...m, planResolved: "approved" } : m),
+      }));
+      refreshAll();
+    } catch (e) {
+      setData((d) => ({
+        ...d,
+        chat: d.chat.map((m, i) => i === msgIndex ? { ...m, planError: e.message || String(e) } : m),
+      }));
+    }
+  }
+  function declinePlan(msgIndex) {
+    setData((d) => ({
+      ...d,
+      chat: d.chat.map((m, i) => i === msgIndex ? { ...m, planResolved: "declined" } : m),
+    }));
+  }
+
   const views = {
     desk: <DeskView data={data} onResolve={resolveApproval} />,
     tasks: <TasksView data={data} />,
     watching: <WatchingView data={data} />,
     approvals: <ApprovalsView data={data} onResolve={resolveApproval} />,
     computer: <ComputerView data={data} />,
-    chat: <ChatView data={data} />,
+    chat: <ChatView data={data} onApprovePlan={approvePlan} onDeclinePlan={declinePlan} />,
   };
 
   const pending = data.approvals.length;

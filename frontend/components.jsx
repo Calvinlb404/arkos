@@ -79,6 +79,39 @@ function ApprovalCard({ item, onResolve }) {
   );
 }
 
+/* ---- inline plan card in chat (workshopped plan awaiting approval).
+   nothing runs until approve; mirrors the original app.js plan-card flow. ---- */
+function PlanCard({ plan, resolved, error, onApprove, onDecline }) {
+  const steps = plan.plan_steps || [];
+  const tools = (plan.required_tools || []);
+  const isComputer = plan.target === "computer";
+  return (
+    <div className="card approval" style={{ marginTop: 10, maxWidth: 560 }}>
+      <div className="top">
+        <span className="src"><Dot kind="work" /> {plan.title || "plan"}</span>
+        <span className="tag accent">{isComputer ? "computer" : "task"}</span>
+      </div>
+      <div className="plan">
+        <ol>{steps.map((s, i) => <li key={i}>{s}</li>)}</ol>
+        <div className="toolrow">
+          {tools.map((t) => <span className="chip" key={t}>{t}</span>)}
+          {isComputer && <span className="chip">sandbox</span>}
+        </div>
+      </div>
+      {error && <div className="body" style={{ color: "var(--stop)" }}>dispatch failed: {error}</div>}
+      <div className="actions">
+        <span className="grow" />
+        {resolved
+          ? <span className="mute" style={{ fontSize: 11 }}>{resolved === "approved" ? "✓ approved — running" : "declined"}</span>
+          : <React.Fragment>
+              <button className="btn" onClick={onDecline}>decline</button>
+              <button className="btn primary" onClick={onApprove}>{isComputer ? "approve & run →" : "approve →"}</button>
+            </React.Fragment>}
+      </div>
+    </div>
+  );
+}
+
 /* ---- task row (expandable event log) ---- */
 function TaskRow({ item }) {
   const [open, setOpen] = useState(false);
@@ -119,4 +152,4 @@ function WatchRow({ item }) {
   );
 }
 
-Object.assign(window, { Dot, Empty, ApprovalCard, TaskRow, WatchRow });
+Object.assign(window, { Dot, Empty, ApprovalCard, PlanCard, TaskRow, WatchRow });

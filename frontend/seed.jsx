@@ -45,6 +45,19 @@ function relTime(iso) {
   return Math.floor(s / 86400) + "d";
 }
 
+/* pull an ```ark-plan {json}``` block out of a buddy reply.
+   returns { text: reply with the fenced block removed, plan: obj|null } */
+function parsePlan(s) {
+  const str = String(s || "");
+  const m = str.match(/```ark-plan\s*\n([\s\S]*?)\n```/);
+  if (!m) return { text: str, plan: null };
+  let plan = null;
+  try { plan = JSON.parse(m[1]); } catch { return { text: str, plan: null }; }
+  // drop malformed blocks (matches the original app.js guard); the prose above still shows
+  if (!plan || !Array.isArray(plan.plan_steps)) return { text: str.replace(m[0], "").trim(), plan: null };
+  return { text: str.replace(m[0], "").trim(), plan };
+}
+
 /* kind -> short glyph for the activity / event stream */
 const KIND_ICON = {
   shell: "$", file: "▤", search: "◉", plan: "≡",
@@ -175,6 +188,31 @@ const api = {
     } catch (e) { console.warn("cancelTask", e); }
   },
 
+  /* dispatch an approved plan. target=computer -> the sandbox agent;
+     otherwise -> the executor subagent via /tasks. nothing runs until here. */
+  async dispatchComputer(prompt) {
+    const r = await fetch(`${CONFIG.backend}/computer/tasks`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json", "X-User-ID": CONFIG.userId }),
+      body: JSON.stringify({ prompt }),
+    });
+    if (!r.ok) throw new Error("dispatch failed: " + r.status);
+    return r.json();
+  },
+  async createTask(plan) {
+    const r = await fetch(`${CONFIG.backend}/tasks`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json", "X-User-ID": CONFIG.userId }),
+      body: JSON.stringify({
+        title: plan.title,
+        plan_steps: plan.plan_steps || [],
+        required_tools: plan.required_tools || [],
+        context_payload: { source: "chat", title: plan.title },
+      }),
+    });
+    if (!r.ok) throw new Error("create task failed: " + r.status);
+    return r.json();
+  },
   async computerTasks() {
     if (!CONFIG.token) return [];
     try {
@@ -260,4 +298,4 @@ const api = {
   },
 };
 
-Object.assign(window, { CONFIG, authHeaders, backendHost, relTime, KIND_ICON, WATCHING, emptyData, api });
+Object.assign(window, { CONFIG, authHeaders, backendHost, relTime, parsePlan, KIND_ICON, WATCHING, emptyData, api });
