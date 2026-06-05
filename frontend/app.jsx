@@ -22,11 +22,14 @@ function shapeTask(t, events) {
 /* a computer task is just a task — shape it identically so it renders in the
    same list / TaskRow with the same expandable event log. */
 function shapeComputerTask(t, events) {
+  // Header is the agent's summary once it lands; until then a short slice of
+  // the request (not the full verbatim prompt).
+  const header = t.summary || (t.prompt || "task").slice(0, 90);
   return {
     id: t.task_id,
     state: t.status === "completed" ? "done" : (t.status === "failed" ? "stop" : "run"),
     when: relTime(t.updated_at) || "running",
-    text: t.prompt || "task",
+    text: header,
     src: t.status,
     events: (events || []).map((e) => ({ k: e.kind, t: (e.content || "").slice(0, 240) })),
   };
