@@ -213,24 +213,9 @@ const api = {
     if (!r.ok) throw new Error("create task failed: " + r.status);
     return r.json();
   },
-  async computerTasks() {
-    if (!CONFIG.token) return [];
-    try {
-      const r = await fetch(`${CONFIG.backend}/computer/tasks`, { headers: authHeaders() });
-      if (!r.ok) return [];
-      const j = await r.json();
-      return j.tasks || [];
-    } catch { return []; }
-  },
-
-  async computerEvents(id) {
-    try {
-      const r = await fetch(`${CONFIG.backend}/computer/tasks/${encodeURIComponent(id)}/events`, { headers: authHeaders() });
-      if (!r.ok) return [];
-      const j = await r.json();
-      return j.events || [];
-    } catch { return []; }
-  },
+  // Computer tasks are now agent_kind='computer' rows in the shared tasks
+  // endpoint, so they arrive via api.tasks()/api.taskEvents() like any task.
+  // Only the sandbox filesystem + dispatch are computer-specific.
 
   async computerFiles(path) {
     const r = await fetch(`${CONFIG.backend}/computer/files?path=${encodeURIComponent(path)}`, { headers: authHeaders() });

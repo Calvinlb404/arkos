@@ -7,30 +7,19 @@
 const NAV = ["desk", "tasks", "watching", "approvals", "computer", "chat"];
 
 /* ---- shapers: backend payloads -> the shapes the views expect ---- */
+/* One shaper for every task (executor or computer). agent_kind='computer'
+   tasks are just rows in `tasks` now (migration 0007), so there is no separate
+   computer shaper. Header prefers the agent's summary, then the title. */
 function shapeTask(t, events) {
   const waiting = t.status === "awaiting_approval";
+  const ctx = t.context_payload || {};
   return {
     id: t.task_id,
+    kind: t.agent_kind || "executor",
     state: t.status === "completed" ? "done" : (t.status === "failed" ? "stop" : "run"),
     when: waiting ? "waiting on you" : relTime(t.updated_at),
-    text: t.title || "task",
+    text: ctx.summary || t.title || "task",
     src: waiting ? "awaiting approval" : t.status,
-    events: (events || []).map((e) => ({ k: e.kind, t: (e.content || "").slice(0, 240) })),
-  };
-}
-
-/* a computer task is just a task — shape it identically so it renders in the
-   same list / TaskRow with the same expandable event log. */
-function shapeComputerTask(t, events) {
-  // Header is the agent's summary once it lands; until then a short slice of
-  // the request (not the full verbatim prompt).
-  const header = t.summary || (t.prompt || "task").slice(0, 90);
-  return {
-    id: t.task_id,
-    state: t.status === "completed" ? "done" : (t.status === "failed" ? "stop" : "run"),
-    when: relTime(t.updated_at) || "running",
-    text: header,
-    src: t.status,
     events: (events || []).map((e) => ({ k: e.kind, t: (e.content || "").slice(0, 240) })),
   };
 }
@@ -119,11 +108,10 @@ function App() {
   async function refreshAll() {
     const online = await api.health();
 
-    const [running, waiting, approvalsRaw, computerTasks] = await Promise.all([
+    const [running, waiting, approvalsRaw] = await Promise.all([
       api.tasks("running"),
       api.tasks("awaiting_approval"),
       api.pendingApprovals(),
-      api.computerTasks(),
     ]);
 
     if (running.unauthorized || waiting.unauthorized) {
@@ -135,20 +123,16 @@ function App() {
       return;
     }
 
+    // One task source: computer tasks are agent_kind='computer' rows in `tasks`
+    // (migration 0007), so they arrive here alongside executor tasks.
     const rawTasks = [...(running.tasks || []), ...(waiting.tasks || [])];
     // pull events for each live task so the expandable log is real
     const eventsList = await Promise.all(rawTasks.map((t) => api.taskEvents(t.task_id)));
 
-    // computer tasks are tasks too — fold the active ones into the same list,
-    // with their event log, so they show in Desk/Tasks like any other task
-    const activeComputer = (computerTasks || []).filter((t) => !["completed", "failed", "cancelled"].includes(t.status));
-    const compEvents = await Promise.all(activeComputer.map((t) => api.computerEvents(t.task_id)));
-
-    const tasks = [
-      ...rawTasks.map((t, i) => shapeTask(t, eventsList[i])),
-      ...activeComputer.map((t, i) => shapeComputerTask(t, compEvents[i])),
-    ];
+    const tasks = rawTasks.map((t, i) => shapeTask(t, eventsList[i]));
     const approvals = approvalsRaw.map(shapeApproval);
+    // Computer tab badge derives from the same list (raw rows keep .status/.agent_kind).
+    const computerTasks = rawTasks.filter((t) => t.agent_kind === "computer");
 
     setData((d) => ({ ...d, online, tasks, approvals, computerTasks }));
   }
