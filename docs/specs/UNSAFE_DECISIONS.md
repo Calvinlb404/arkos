@@ -2,7 +2,7 @@
 
 *A living list of decisions where we knowingly traded safety/correctness for MVP speed. Each entry: what it is, why it's unsafe, why we accepted it, the blast radius, and the trigger that forces a fix. Nothing here is a bug we missed -- it's debt we chose. Review this list before any public / multi-tenant deployment.*
 
-**Status:** Living | **Last updated:** 2026-06-03
+**Status:** Living | **Last updated:** 2026-06-05
 
 Legend -- **Blast radius:** who is harmed if it's exploited. **Fix-by:** the condition that turns "accepted" into "must fix."
 
@@ -131,6 +131,20 @@ Legend -- **Blast radius:** who is harmed if it's exploited. **Fix-by:** the con
 **Blast radius:** None security-wise (this entry documents a fix that *removed* a leak). Minor UX: buddy's system prompt won't name a user's connected tools, though it can still call them.
 
 **Fix-by:** When desired, build the system prompt *per-user* in `_make_agent` using `list_all_tools(user_id)` instead of a single global prompt. Bigger change (per-user prompts); deferred.
+
+---
+
+## U10 -- Sandbox state is lost on hard timeout (no idle-pause lifecycle)
+
+**Decision:** The per-user e2b sandbox has a short active timeout (`computer_agent.sandbox.timeout_seconds`, currently 300s). If it sits idle past that **without being paused**, e2b reaps it; the next access transparently creates a **fresh, empty** sandbox (`SandboxManager.get_or_create`, hardened in commit `bf88386`).
+
+**Why unsafe:** Silent data loss. A user's files/work in the sandbox can disappear after ~5 min of inactivity. The recovery path stops the 500s but does not restore the lost filesystem.
+
+**Why accepted:** The common path is covered -- the runner calls `sandbox.pause()` after each task, and `get_or_create` now refreshes the idle timer (`set_timeout`) on every op so an *active* session stays alive. The gap is a sandbox kept alive only by browsing, or left active and then abandoned. `idle_timeout_seconds: 900` ("pause after idle") is noted in `config.yaml` but **not yet implemented**.
+
+**Blast radius:** Durability only (no security boundary crossed) -- per-user loss of un-paused sandbox contents.
+
+**Fix-by:** Implement the idle->pause lifecycle (pause on idle instead of letting e2b hard-reap), and/or move to e2b persistent volumes when available. Until then, treat the sandbox as scratch space that only survives across a *paused* gap.
 
 ---
 
