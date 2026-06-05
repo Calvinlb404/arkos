@@ -224,6 +224,7 @@ function fmtSize(n) {
 function SettingsModal({ data, onClose, onSignOut }) {
   const [services, setServices] = useState(null);   // { shared, per_user, error }
   const [busy, setBusy] = useState({});
+  const [authLink, setAuthLink] = useState({});     // service -> setup_url, shown if popup was blocked
   const pollRef = useRef(null);
 
   async function refresh() {
@@ -247,20 +248,31 @@ function SettingsModal({ data, onClose, onSignOut }) {
     }, 2000);
   }
 
-  async function connect(service) {
+  function connect(service) {
+    // Open the popup SYNCHRONOUSLY inside the click handler. If we open it
+    // after `await api.connectService`, the browser has lost the user-gesture
+    // and silently blocks it (the "nothing happens" bug). We open a blank
+    // window now and navigate it once Smithery hands back the setup_url.
+    const popup = window.open("about:blank", "ark_oauth", "width=560,height=720");
     setBusy((b) => ({ ...b, [service]: true }));
-    try {
-      const j = await api.connectService(service);
-      if (j.status === "connected") { await refresh(); return; }
+    setAuthLink((m) => ({ ...m, [service]: null }));
+    api.connectService(service).then((j) => {
+      if (j.status === "connected") { if (popup) popup.close(); refresh(); return; }
       if (j.setup_url) {
-        const popup = window.open(j.setup_url, "ark_oauth", "width=560,height=720");
+        if (popup && !popup.closed) popup.location.href = j.setup_url;
+        else setAuthLink((m) => ({ ...m, [service]: j.setup_url }));  // blocked: surface a link
         startPoll(service, popup);
       } else {
-        await refresh();
+        if (popup) popup.close();
+        setServices((s) => ({ ...(s || {}), error: j.error || "could not start authorization" }));
+        refresh();
       }
-    } finally {
+    }).catch((e) => {
+      if (popup) popup.close();
+      setServices((s) => ({ ...(s || {}), error: String(e) }));
+    }).finally(() => {
       setBusy((b) => ({ ...b, [service]: false }));
-    }
+    });
   }
 
   async function disconnect(service) {
@@ -300,7 +312,9 @@ function SettingsModal({ data, onClose, onSignOut }) {
                   {perU ? (
                     connected
                       ? <button className="btn" disabled={busy[c.service]} onClick={() => disconnect(c.service)}>disconnect</button>
-                      : <button className="btn primary" disabled={busy[c.service]} onClick={() => connect(c.service)}>{busy[c.service] ? "…" : "connect"}</button>
+                      : authLink[c.service]
+                        ? <a className="btn primary" href={authLink[c.service]} target="ark_oauth" rel="noopener" onClick={() => startPoll(c.service, null)}>authorize →</a>
+                        : <button className="btn primary" disabled={busy[c.service]} onClick={() => connect(c.service)}>{busy[c.service] ? "…" : "connect"}</button>
                   ) : (
                     <span className="soft" style={{ fontSize: 10 }}>always on</span>
                   )}
