@@ -244,46 +244,103 @@ async def test_handler_rejects_missing_task():
 # ---------------------------------------------------------------------------
 
 
-class _FakeCDP:
-    """Minimal stand-in for a playwright CDPSession that records sent commands
-    and lets a test fire synthetic Page.screencastFrame events at it."""
+class _FakeMethodNamespace:
+    """Stand-in for the chained `cdp_client.send.Page.startScreencast(...)` and
+    `cdp_client.register.Page.screencastFrame(...)` accessor patterns that
+    cdp_use exposes inside browser-use 0.12."""
+
+    def __init__(self, on_call):
+        self._on_call = on_call
+
+    def __getattr__(self, attr):
+        # Each attribute access returns another namespace that records the
+        # full chain when finally called.
+        return _FakeMethodNamespace(lambda *args, _path=attr, **kwargs: self._on_call(_path, args, kwargs))
+
+
+class _FakeCDPClient:
+    """Records both registered event handlers (.register.Page.screencastFrame)
+    and sent commands (.send.Page.startScreencast)."""
 
     def __init__(self):
-        self.sent: list[tuple[str, dict]] = []
+        self.sent: list[tuple[str, tuple, dict]] = []
         self._handlers: dict[str, list] = {}
+        self.send = _Sender(self.sent)
+        self.register = _Registrar(self._handlers)
 
-    def on(self, event, handler):
-        self._handlers.setdefault(event, []).append(handler)
-
-    async def send(self, method, params=None):
-        self.sent.append((method, params or {}))
-
-    def fire(self, event, params):
-        for h in self._handlers.get(event, []):
-            h(params)
+    def fire(self, method: str, event: dict, session_id=None):
+        for handler in self._handlers.get(method, []):
+            handler(event, session_id)
 
 
-class _FakeContext:
-    def __init__(self, cdp):
-        self._cdp = cdp
+class _Sender:
+    def __init__(self, sink):
+        self._sink = sink
 
-    async def new_cdp_session(self, page):
-        return self._cdp
+    def __getattr__(self, namespace):
+        return _SenderNamespace(self._sink, namespace)
 
 
-class _FakePage:
-    def __init__(self, cdp):
-        self.context = _FakeContext(cdp)
+class _SenderNamespace:
+    def __init__(self, sink, namespace):
+        self._sink = sink
+        self._namespace = namespace
+
+    def __getattr__(self, method):
+        async def call(params=None, session_id=None):
+            self._sink.append((f"{self._namespace}.{method}", params or {}, session_id))
+
+        return call
+
+
+class _Registrar:
+    def __init__(self, sink):
+        self._sink = sink
+
+    def __getattr__(self, namespace):
+        return _RegistrarNamespace(self._sink, namespace)
+
+
+class _RegistrarNamespace:
+    def __init__(self, sink, namespace):
+        self._sink = sink
+        self._namespace = namespace
+
+    def __getattr__(self, method):
+        def register(handler):
+            self._sink.setdefault(f"{self._namespace}.{method}", []).append(handler)
+
+        return register
+
+
+class _FakeCDPSession:
+    def __init__(self, cdp_client, target_id="T1", session_id="S1"):
+        self.cdp_client = cdp_client
+        self.target_id = target_id
+        self.session_id = session_id
+
+
+class _FakeBrowserSession:
+    """Minimal stand-in for browser-use 0.12 BrowserSession."""
+
+    def __init__(self, cdp_client, *, target_id="T1", session_id="S1"):
+        self.cdp_client = cdp_client
+        self.agent_focus_target_id = target_id
+        self._session = _FakeCDPSession(cdp_client, target_id=target_id, session_id=session_id)
+
+    async def get_or_create_cdp_session(self, target_id=None, focus=False):
+        return self._session
 
 
 @pytest.mark.asyncio
 async def test_browser_tool_starts_and_ends_screencast_session(monkeypatch):
     """Around agent.run(), the broker must see exactly one started/ended pair
-    and any CDP frames must be forwarded to push_frame."""
+    and any CDP frames must be forwarded to push_frame. Drives the broker via
+    the 0.12 CDP client surface."""
     import tool_module.browser_tool as bt
 
-    cdp = _FakeCDP()
-    page = _FakePage(cdp)
+    cdp_client = _FakeCDPClient()
+    browser_session = _FakeBrowserSession(cdp_client)
 
     captured = []
 
@@ -298,36 +355,29 @@ async def test_browser_tool_starts_and_ends_screencast_session(monkeypatch):
             captured.append(("end", user_id))
 
     monkeypatch.setattr(bt, "_stream_broker", FakeBroker())
-    monkeypatch.setattr(bt, "_find_agent_page", lambda agent: page)
 
     _install_fake_browser_use(monkeypatch, run_side_effect="done")
     monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
 
-    # Drive a frame through during agent.run(): patch agent.run on the fake.
-    import sys as _sys
-
-    real_browser_use = _sys.modules["browser_use"]
+    real_browser_use = sys.modules["browser_use"]
 
     class FakeAgentWithFrame:
-        def __init__(self, task, llm, browser):
+        def __init__(self, task, llm, browser, **_):
             self.browser = browser
+            self.browser_session = browser_session
 
-        async def run(self):
-            # Give the screencast task time to attach, then fire a frame.
-            for _ in range(20):
-                if (
-                    "Page.startScreencast",
-                    {
-                        "format": "jpeg",
-                        "quality": 60,
-                        "maxWidth": 1024,
-                        "maxHeight": 768,
-                        "everyNthFrame": 1,
-                    },
-                ) in cdp.sent:
+        async def run(self, max_steps=None):
+            # Wait until the screencast handler has registered and Start was sent.
+            for _ in range(40):
+                if any(s[0] == "Page.startScreencast" for s in cdp_client.sent):
                     break
                 await asyncio.sleep(0.01)
-            cdp.fire("Page.screencastFrame", {"data": "ZZZZ", "sessionId": 1})
+            # Fire a frame from cdp_client (event + session_id matching ours).
+            cdp_client.fire(
+                "Page.screencastFrame",
+                {"data": "ZZZZ", "sessionId": 7},
+                session_id="S1",
+            )
             await asyncio.sleep(0.01)
 
             class _H:
@@ -341,14 +391,70 @@ async def test_browser_tool_starts_and_ends_screencast_session(monkeypatch):
     result = await bt.run_browser_task("user_42", "do a thing")
 
     assert result == "done"
-    # Must have exactly one start/end and at least one frame in between.
     assert ("start", "user_42") in captured
     assert ("end", "user_42") in captured
     assert ("frame", "user_42", "ZZZZ") in captured
-    # Acks should have been sent for any fired frames.
-    assert ("Page.screencastFrameAck", {"sessionId": 1}) in cdp.sent
-    # Stop must have been issued on teardown.
-    assert ("Page.stopScreencast", {}) in cdp.sent
+    # Page.startScreencast must have been sent with our session_id.
+    start_calls = [s for s in cdp_client.sent if s[0] == "Page.startScreencast"]
+    assert start_calls, "startScreencast was never sent"
+    assert start_calls[0][2] == "S1"  # session_id
+    # An ack for the fired frame.
+    ack_calls = [s for s in cdp_client.sent if s[0] == "Page.screencastFrameAck"]
+    assert any(s[1].get("sessionId") == 7 for s in ack_calls), "ack missing for fired frame"
+    # Stop on teardown.
+    assert any(s[0] == "Page.stopScreencast" for s in cdp_client.sent)
+
+
+@pytest.mark.asyncio
+async def test_browser_tool_screencast_ignores_frames_from_other_sessions(monkeypatch):
+    """The cdp_client is shared across all CDP targets the agent attaches to.
+    Frames for OTHER sessions must not bleed into this user's stream."""
+    import tool_module.browser_tool as bt
+
+    cdp_client = _FakeCDPClient()
+    browser_session = _FakeBrowserSession(cdp_client, session_id="S1")
+
+    frames = []
+
+    class FakeBroker:
+        def start_session(self, user_id):
+            pass
+
+        def push_frame(self, user_id, jpeg_b64):
+            frames.append(jpeg_b64)
+
+        def end_session(self, user_id):
+            pass
+
+    monkeypatch.setattr(bt, "_stream_broker", FakeBroker())
+    _install_fake_browser_use(monkeypatch, run_side_effect="done")
+    monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
+
+    real_browser_use = sys.modules["browser_use"]
+
+    class FakeAgent:
+        def __init__(self, task, llm, browser, **_):
+            self.browser_session = browser_session
+
+        async def run(self, max_steps=None):
+            for _ in range(40):
+                if any(s[0] == "Page.startScreencast" for s in cdp_client.sent):
+                    break
+                await asyncio.sleep(0.01)
+            cdp_client.fire("Page.screencastFrame", {"data": "MINE", "sessionId": 1}, session_id="S1")
+            cdp_client.fire("Page.screencastFrame", {"data": "NOPE", "sessionId": 2}, session_id="OTHER")
+            await asyncio.sleep(0.01)
+
+            class _H:
+                def final_result(self_inner):
+                    return "done"
+
+            return _H()
+
+    real_browser_use.Agent = FakeAgent
+
+    await bt.run_browser_task("user_1", "task")
+    assert frames == ["MINE"]
 
 
 @pytest.mark.asyncio
@@ -381,20 +487,40 @@ async def test_browser_tool_screencast_disabled_via_env(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_browser_tool_screencast_failure_does_not_break_agent(monkeypatch):
-    """If we cannot find a page, the agent must still complete and return."""
+    """If the agent never focuses a target (agent_focus_target_id stays None),
+    the screencast must quietly exit and the agent must still complete."""
     import tool_module.browser_tool as bt
 
-    monkeypatch.setattr(bt, "_find_agent_page", lambda agent: None)
     _install_fake_browser_use(monkeypatch, run_side_effect="ok")
     monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
 
-    # Speed up the page-discovery loop in the test
+    # Speed up the target-readiness poll loop
     real_sleep = asyncio.sleep
 
     async def fast_sleep(seconds):
         await real_sleep(0)
 
     monkeypatch.setattr(bt.asyncio, "sleep", fast_sleep)
+
+    real_browser_use = sys.modules["browser_use"]
+
+    class NoTargetAgent:
+        def __init__(self, task, llm, browser, **_):
+            # agent_focus_target_id stays falsy — screencast should bail.
+            self.browser_session = SimpleNamespaceLike(agent_focus_target_id=None)
+
+        async def run(self, max_steps=None):
+            class _H:
+                def final_result(self_inner):
+                    return "ok"
+
+            return _H()
+
+    class SimpleNamespaceLike:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    real_browser_use.Agent = NoTargetAgent
 
     result = await bt.run_browser_task("user_1", "task")
     assert result == "ok"

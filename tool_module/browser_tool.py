@@ -84,72 +84,77 @@ def _bool_env(name: str, default: bool) -> bool:
     return raw.lower() in {"1", "true", "yes", "on"}
 
 
-def _find_agent_page(agent: Any) -> Any | None:
-    """Best-effort lookup of the playwright Page browser-use is driving.
+async def _wait_for_agent_target(agent: Any, timeout_s: float = 10.0) -> bool:
+    """Wait until browser-use has focused on a real Chromium target.
 
-    browser-use 0.12 makes Browser an alias for BrowserSession, and the
-    current page is reachable as `agent.browser_session.current_page` or via
-    the underlying playwright context. Older shapes are tried as a fallback.
+    browser-use 0.12 exposes the currently focused page's target id as
+    `agent.browser_session.agent_focus_target_id`. Until that's populated,
+    there's nothing to screencast.
     """
-    paths = (
-        lambda: agent.browser_session.current_page,
-        lambda: agent.browser_session.browser_context.pages[-1],
-        lambda: agent.browser.current_page,
-        lambda: agent.browser.browser_context.pages[-1],
-    )
-    for resolve in paths:
+    deadline_loops = int(timeout_s / 0.1)
+    for _ in range(deadline_loops):
         try:
-            page = resolve()
-            if page is not None:
-                return page
-        except (AttributeError, IndexError, TypeError):
-            continue
-    return None
+            target_id = agent.browser_session.agent_focus_target_id
+        except AttributeError:
+            return False
+        if target_id:
+            return True
+        await asyncio.sleep(0.1)
+    return False
 
 
 async def _run_screencast(agent: Any, user_id: str) -> None:
-    """Wait for browser-use to open a page, attach CDP screencast, forward frames.
+    """Stream CDP screencast frames from the agent's focused page to the broker.
 
-    Cancelled in `run_browser_task`'s finally block. Any failure logs and exits
-    quietly; the agent's own run is never affected by screencast errors.
+    Uses the browser-use 0.12 CDP surface (cdp_use under the hood):
+    `agent.browser_session.cdp_client` for event registration plus
+    `agent.browser_session.get_or_create_cdp_session(target_id=None, focus=False)`
+    for the per-target session id we send `Page.startScreencast` against.
+
+    Any failure logs and exits quietly; the agent's own run is never affected.
+    Cancelled by `run_browser_task`'s finally block.
     """
-    page = None
-    for _ in range(50):  # ~5s of polling
-        page = _find_agent_page(agent)
-        if page is not None:
-            break
-        await asyncio.sleep(0.1)
-    if page is None:
-        logger.info("browser_tool: no page found within timeout; skipping screencast")
+    if not await _wait_for_agent_target(agent):
+        logger.info("browser_tool: no agent target within timeout; skipping screencast")
         return
 
     try:
-        cdp = await page.context.new_cdp_session(page)
+        session = agent.browser_session
+        cdp_session = await session.get_or_create_cdp_session(target_id=None, focus=False)
     except Exception:
-        logger.exception("browser_tool: failed to open CDP session for screencast")
+        logger.exception("browser_tool: failed to acquire CDP session for screencast")
         return
 
-    def _on_frame(params: dict[str, Any]) -> None:
-        data = params.get("data")
-        session_id = params.get("sessionId")
+    target_session_id = cdp_session.session_id
+
+    def _on_frame(event: dict[str, Any], session_id: Any = None) -> None:
+        # Only forward frames for OUR session; the shared cdp_client also fires
+        # for other targets the agent attaches to during a run.
+        if session_id is not None and session_id != target_session_id:
+            return
+        data = event.get("data")
+        frame_session_id = event.get("sessionId")
         if data:
             _stream_broker.push_frame(user_id, data)
-        if session_id is not None:
-            # Ack so Chrome keeps sending. Fire-and-forget; an ack failure
-            # just stops the screencast, doesn't break the agent.
-            asyncio.create_task(_safe_ack(cdp, session_id))
+        if frame_session_id is not None:
+            asyncio.create_task(_safe_ack(cdp_session, frame_session_id))
 
-    cdp.on("Page.screencastFrame", _on_frame)
     try:
-        await cdp.send(
-            "Page.startScreencast",
-            {
+        session.cdp_client.register.Page.screencastFrame(_on_frame)
+    except Exception:
+        logger.exception("browser_tool: failed to register Page.screencastFrame handler")
+        return
+
+    try:
+        await cdp_session.cdp_client.send.Page.startScreencast(
+            params={
                 "format": "jpeg",
                 "quality": 60,
                 "maxWidth": 1024,
                 "maxHeight": 768,
                 "everyNthFrame": 1,
             },
+            session_id=target_session_id,
         )
     except Exception:
         logger.exception("browser_tool: Page.startScreencast failed")
@@ -161,13 +166,16 @@ async def _run_screencast(agent: Any, user_id: str) -> None:
             await asyncio.sleep(3600)
     except asyncio.CancelledError:
         with contextlib.suppress(Exception):
-            await cdp.send("Page.stopScreencast")
+            await cdp_session.cdp_client.send.Page.stopScreencast(params={}, session_id=target_session_id)
         raise
 
 
-async def _safe_ack(cdp: Any, session_id: int) -> None:
+async def _safe_ack(cdp_session: Any, session_id: int) -> None:
     with contextlib.suppress(Exception):
-        await cdp.send("Page.screencastFrameAck", {"sessionId": session_id})
+        await cdp_session.cdp_client.send.Page.screencastFrameAck(
+            params={"sessionId": session_id},
+            session_id=cdp_session.session_id,
+        )
 
 
 def _augment_cdp_url(url: str) -> str:
