@@ -22,6 +22,13 @@ Configuration (env):
   BROWSER_USE_MAX_STEPS    hard cap on browser-use agent steps (default 25).
   BROWSER_USE_MAX_SECONDS  wall-clock timeout for one task in seconds
                            (default 180). Beats infinite reCAPTCHA loops.
+  BROWSER_USE_MAX_FAILURES         consecutive failed steps before the agent
+                                   gives up (default 3, matches browser-use).
+  BROWSER_USE_MAX_ACTIONS_PER_STEP max actions browser-use bundles into one
+                                   step, e.g. for filling multi-field forms
+                                   (default 4, matches browser-use).
+  BROWSER_USE_LLM_TIMEOUT          per-LLM-call timeout in seconds (default
+                                   90, matches browser-use).
 """
 
 from __future__ import annotations
@@ -131,6 +138,41 @@ async def _safe_ack(cdp: Any, session_id: int) -> None:
         await cdp.send("Page.screencastFrameAck", {"sessionId": session_id})
 
 
+_REQUIRED_AGENT_KWARGS = frozenset({"task", "llm", "browser"})
+
+
+def _build_agent(agent_cls: Any, kwargs: dict[str, Any]) -> Any:
+    """Construct a browser-use Agent, dropping optional kwargs the installed
+    version doesn't accept.
+
+    browser-use moves parameters in and out of the Agent constructor across
+    minor releases. We introspect the signature and pass only what's
+    accepted — required kwargs always go through; optional ones are dropped
+    silently. Beats version-pinning the kwarg list against a fast-moving dep.
+    """
+    import inspect
+
+    try:
+        sig = inspect.signature(agent_cls.__init__)
+        params = sig.parameters
+    except (TypeError, ValueError):
+        # Can't introspect (e.g. C-implemented class). Try as-is and let the
+        # caller deal with any TypeError.
+        return agent_cls(**kwargs)
+
+    accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    accepted: dict[str, Any] = {}
+    dropped: list[str] = []
+    for k, v in kwargs.items():
+        if k in _REQUIRED_AGENT_KWARGS or k in params or accepts_kwargs:
+            accepted[k] = v
+        else:
+            dropped.append(k)
+    if dropped:
+        logger.info("browser_tool: Agent does not accept %s; dropping", dropped)
+    return agent_cls(**accepted)
+
+
 async def run_browser_task(user_id: str, task: str) -> str:
     """Run a single browser task in an isolated Browserless session.
 
@@ -161,13 +203,20 @@ async def run_browser_task(user_id: str, task: str) -> str:
     )
     max_steps = int(os.environ.get("BROWSER_USE_MAX_STEPS", "25"))
     max_seconds = float(os.environ.get("BROWSER_USE_MAX_SECONDS", "180"))
+    max_failures = int(os.environ.get("BROWSER_USE_MAX_FAILURES", "3"))
+    max_actions_per_step = int(os.environ.get("BROWSER_USE_MAX_ACTIONS_PER_STEP", "4"))
+    llm_timeout = int(os.environ.get("BROWSER_USE_LLM_TIMEOUT", "90"))
 
     browser = Browser(cdp_url=cdp_url, is_local=False)
-    agent = Agent(
-        task=task,
-        llm=ChatOpenAI(model=llm_model, base_url=llm_base_url, api_key=llm_api_key),
-        browser=browser,
-    )
+    agent_kwargs: dict[str, Any] = {
+        "task": task,
+        "llm": ChatOpenAI(model=llm_model, base_url=llm_base_url, api_key=llm_api_key),
+        "browser": browser,
+        "max_failures": max_failures,
+        "max_actions_per_step": max_actions_per_step,
+        "llm_timeout": llm_timeout,
+    }
+    agent = _build_agent(Agent, agent_kwargs)
 
     screencast_task: asyncio.Task[None] | None = None
     if _stream_enabled():

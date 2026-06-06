@@ -485,3 +485,101 @@ async def test_browser_tool_passes_max_steps_when_supported(monkeypatch):
     result = await run_browser_task("user_1", "task")
     assert result == "done"
     assert captured["max_steps"] == 7
+
+
+@pytest.mark.asyncio
+async def test_browser_tool_passes_agent_config_knobs(monkeypatch):
+    """max_failures, max_actions_per_step, llm_timeout should be passed to Agent."""
+    captured: dict[str, object] = {}
+
+    fake_browser_use = types.ModuleType("browser_use")
+
+    class FakeBrowser:
+        def __init__(self, cdp_url=None, is_local=True):
+            pass
+
+        async def close(self):
+            pass
+
+    class FakeHistory:
+        def final_result(self):
+            return "done"
+
+    class FakeAgent:
+        def __init__(self, task, llm, browser, max_failures=None, max_actions_per_step=None, llm_timeout=None):
+            captured["max_failures"] = max_failures
+            captured["max_actions_per_step"] = max_actions_per_step
+            captured["llm_timeout"] = llm_timeout
+
+        async def run(self, max_steps=None):
+            return FakeHistory()
+
+    class FakeChatOpenAI:
+        def __init__(self, model, base_url=None, api_key=None):
+            pass
+
+    fake_browser_use.Agent = FakeAgent
+    fake_browser_use.Browser = FakeBrowser
+    fake_browser_use.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "browser_use", fake_browser_use)
+
+    monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
+    monkeypatch.setenv("BROWSER_USE_MAX_FAILURES", "5")
+    monkeypatch.setenv("BROWSER_USE_MAX_ACTIONS_PER_STEP", "8")
+    monkeypatch.setenv("BROWSER_USE_LLM_TIMEOUT", "30")
+    monkeypatch.setenv("BROWSER_STREAM_ENABLED", "0")
+
+    from tool_module.browser_tool import run_browser_task
+
+    await run_browser_task("user_1", "task")
+
+    assert captured["max_failures"] == 5
+    assert captured["max_actions_per_step"] == 8
+    assert captured["llm_timeout"] == 30
+
+
+@pytest.mark.asyncio
+async def test_browser_tool_silently_drops_unsupported_kwargs(monkeypatch):
+    """Older browser-use versions whose Agent doesn't accept max_failures must
+    not crash — the kwargs are introspected and dropped."""
+    captured: dict[str, object] = {}
+
+    fake_browser_use = types.ModuleType("browser_use")
+
+    class FakeBrowser:
+        def __init__(self, cdp_url=None, is_local=True):
+            pass
+
+        async def close(self):
+            pass
+
+    class FakeHistory:
+        def final_result(self):
+            return "fallback"
+
+    class FakeAgent:
+        # Old constructor: only the required three.
+        def __init__(self, task, llm, browser):
+            captured["constructed"] = True
+
+        async def run(self, max_steps=None):
+            return FakeHistory()
+
+    class FakeChatOpenAI:
+        def __init__(self, model, base_url=None, api_key=None):
+            pass
+
+    fake_browser_use.Agent = FakeAgent
+    fake_browser_use.Browser = FakeBrowser
+    fake_browser_use.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "browser_use", fake_browser_use)
+
+    monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
+    monkeypatch.setenv("BROWSER_USE_MAX_FAILURES", "5")
+    monkeypatch.setenv("BROWSER_STREAM_ENABLED", "0")
+
+    from tool_module.browser_tool import run_browser_task
+
+    result = await run_browser_task("user_1", "task")
+    assert result == "fallback"
+    assert captured["constructed"] is True
