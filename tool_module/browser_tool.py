@@ -54,6 +54,13 @@ Configuration (env):
                                    main LLM and only pays off when a
                                    ground_truth is supplied, which arkos
                                    doesn't have.
+  BROWSER_USE_ENABLE_PLANNING      "1" to let the Agent insert higher-level
+                                   planning passes (default "1" matches
+                                   browser-use 0.12).
+  BROWSER_USE_REPLAN_ON_STALL      consecutive failed step count that
+                                   triggers a planning replan (default 3).
+  BROWSER_USE_EXPLORATION_LIMIT    steps between planning passes during
+                                   normal progress (default 5).
 """
 
 from __future__ import annotations
@@ -270,6 +277,9 @@ async def run_browser_task(user_id: str, task: str) -> str:
     use_vision = _bool_env("BROWSER_USE_VISION", default=False)
     use_thinking = _bool_env("BROWSER_USE_THINKING", default=False)
     use_judge = _bool_env("BROWSER_USE_USE_JUDGE", default=False)
+    enable_planning = _bool_env("BROWSER_USE_ENABLE_PLANNING", default=True)
+    replan_on_stall = int(os.environ.get("BROWSER_USE_REPLAN_ON_STALL", "3"))
+    exploration_limit = int(os.environ.get("BROWSER_USE_EXPLORATION_LIMIT", "5"))
 
     effective_cdp_url = _augment_cdp_url(cdp_url)
     browser = Browser(cdp_url=effective_cdp_url, is_local=False)
@@ -283,6 +293,9 @@ async def run_browser_task(user_id: str, task: str) -> str:
         "use_vision": use_vision,
         "use_thinking": use_thinking,
         "use_judge": use_judge,
+        "enable_planning": enable_planning,
+        "planning_replan_on_stall": replan_on_stall,
+        "planning_exploration_limit": exploration_limit,
     }
     agent = _build_agent(Agent, agent_kwargs)
 
