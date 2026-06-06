@@ -71,6 +71,13 @@ Configuration (env):
                                    commits, alert dialogs) to the agent
                                    each step. Helps recovery from page-load
                                    races. Default "0" — matches browser-use.
+  BROWSER_USE_EXTRA_GUIDANCE        extra free-form text appended to
+                                   browser-use's built-in system prompt
+                                   for every step. If unset, arkos appends
+                                   its own defaults (be concise, dismiss
+                                   cookie banners, never ask the user
+                                   mid-task, prefer direct URLs over
+                                   search-engine indirection).
 """
 
 from __future__ import annotations
@@ -99,6 +106,34 @@ def _bool_env(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.lower() in {"1", "true", "yes", "on"}
+
+
+# Default per-step guidance appended to browser-use's built-in system prompt.
+# Tuned for arkos's typical task shape: a chat user asks buddy to do one
+# concrete thing, we have no human in the loop during execution, and we want
+# determinism over creativity. Override entirely via BROWSER_USE_EXTRA_GUIDANCE.
+_DEFAULT_EXTRA_GUIDANCE = (
+    "Operating context: you are arkos's automation agent running inside a "
+    "headless Chromium sandbox. The user is NOT watching this execution and "
+    "CANNOT answer questions mid-task — never wait for human input; if a "
+    "step is ambiguous, make the most reasonable assumption and continue.\n"
+    "\n"
+    "Behaviour rules:\n"
+    "  - Be concise. Return the smallest answer that satisfies the task.\n"
+    "  - If the task names a specific URL, go directly to it; don't route "
+    "through a search engine.\n"
+    "  - When a cookie/consent banner blocks the page, dismiss it (accept or "
+    "decline — whichever is one click away) and continue.\n"
+    "  - When a modal/overlay covers the content you need, close it before "
+    "trying to read or click underneath.\n"
+    "  - Treat reCAPTCHA, login walls, and paywalls as task-blocking; report "
+    "what you saw and stop rather than thrash on them.\n"
+    "  - Never invent data. If a value isn't present on the page, say so.\n"
+)
+
+
+def _extra_guidance() -> str:
+    return os.environ.get("BROWSER_USE_EXTRA_GUIDANCE") or _DEFAULT_EXTRA_GUIDANCE
 
 
 async def _wait_for_agent_target(agent: Any, timeout_s: float = 10.0) -> bool:
@@ -292,6 +327,7 @@ async def run_browser_task(user_id: str, task: str) -> str:
     exploration_limit = int(os.environ.get("BROWSER_USE_EXPLORATION_LIMIT", "5"))
     flash_mode = _bool_env("BROWSER_USE_FLASH_MODE", default=False)
     include_recent_events = _bool_env("BROWSER_USE_INCLUDE_RECENT_EVENTS", default=False)
+    extra_guidance = _extra_guidance()
 
     effective_cdp_url = _augment_cdp_url(cdp_url)
     browser = Browser(cdp_url=effective_cdp_url, is_local=False)
@@ -310,6 +346,7 @@ async def run_browser_task(user_id: str, task: str) -> str:
         "planning_exploration_limit": exploration_limit,
         "flash_mode": flash_mode,
         "include_recent_events": include_recent_events,
+        "extend_system_message": extra_guidance,
     }
     agent = _build_agent(Agent, agent_kwargs)
 
