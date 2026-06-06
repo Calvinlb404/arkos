@@ -84,6 +84,12 @@ Configuration (env):
                                    any task longer than ~10 steps to
                                    avoid blowing the model's context).
                                    Flip to "0" only to debug a step.
+  BROWSER_USE_COMPACT_EVERY_N_STEPS  override browser-use's default
+                                   compact_every_n_steps=25. Defaults to
+                                   10 so compaction actually fires before
+                                   BROWSER_USE_MAX_STEPS (default 25)
+                                   cuts the run off. Set to 0 to fall
+                                   back to the browser-use default.
   BROWSER_USE_LOOP_DETECTION        "1" to enable browser-use's loop
                                    detector (default "1"). Disabling it
                                    on purposefully-repetitive tasks (e.g.
@@ -160,6 +166,42 @@ _DEFAULT_EXTRA_GUIDANCE = (
 
 def _extra_guidance() -> str:
     return os.environ.get("BROWSER_USE_EXTRA_GUIDANCE") or _DEFAULT_EXTRA_GUIDANCE
+
+
+def _build_compaction_settings() -> Any:
+    """Decide what to pass for the Agent's `message_compaction` kwarg.
+
+    browser-use 0.12.6's default compact_every_n_steps=25 is exactly our
+    BROWSER_USE_MAX_STEPS cap, so compaction is effectively never reached on
+    arkos — long tasks silently overflow the model's context window. Default
+    to 10 here so compaction fires twice within a 25-step run and the
+    context stays bounded.
+
+    Returns:
+      - False if BROWSER_USE_MESSAGE_COMPACTION=0  (compaction disabled)
+      - True  if BROWSER_USE_COMPACT_EVERY_N_STEPS=0  (browser-use defaults)
+      - a MessageCompactionSettings instance otherwise
+    """
+    if not _bool_env("BROWSER_USE_MESSAGE_COMPACTION", default=True):
+        return False
+    every_n = int(os.environ.get("BROWSER_USE_COMPACT_EVERY_N_STEPS", "10"))
+    if every_n <= 0:
+        return True
+    try:
+        from browser_use.agent.views import MessageCompactionSettings
+    except ImportError:
+        try:
+            from browser_use import MessageCompactionSettings  # type: ignore
+        except ImportError:
+            # Older browser_use without the settings type — fall back to the
+            # plain True bool; arkos's compaction will use library defaults.
+            logger.info("browser_tool: MessageCompactionSettings not importable; using boolean compaction")
+            return True
+    try:
+        return MessageCompactionSettings(compact_every_n_steps=every_n)
+    except Exception:
+        logger.exception("browser_tool: failed to instantiate MessageCompactionSettings; falling back to True")
+        return True
 
 
 async def _wait_for_agent_target(agent: Any, timeout_s: float = 10.0) -> bool:
@@ -384,7 +426,7 @@ async def run_browser_task(user_id: str, task: str) -> str:
     flash_mode = _bool_env("BROWSER_USE_FLASH_MODE", default=False)
     include_recent_events = _bool_env("BROWSER_USE_INCLUDE_RECENT_EVENTS", default=False)
     extra_guidance = _extra_guidance()
-    message_compaction = _bool_env("BROWSER_USE_MESSAGE_COMPACTION", default=True)
+    message_compaction = _build_compaction_settings()
     loop_detection_enabled = _bool_env("BROWSER_USE_LOOP_DETECTION", default=True)
     loop_detection_window = int(os.environ.get("BROWSER_USE_LOOP_WINDOW", "20"))
     max_history_items_raw = os.environ.get("BROWSER_USE_MAX_HISTORY_ITEMS")
