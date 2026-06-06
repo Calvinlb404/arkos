@@ -47,8 +47,7 @@ def _parse_sse(chunk: str) -> dict:
 
 @pytest.mark.asyncio
 async def test_event_stream_forwards_broker_events(fresh_broker):
-    req = _FakeRequest(headers={"X-User-ID": "alice"})
-    gen = browser_routes._event_stream("alice", req)
+    gen = browser_routes._event_stream("alice")
 
     fresh_broker.start_session("alice")
     fresh_broker.push_frame("alice", "ZZZZ")
@@ -66,8 +65,7 @@ async def test_event_stream_forwards_broker_events(fresh_broker):
 @pytest.mark.asyncio
 async def test_event_stream_isolates_users(fresh_broker):
     """Bob's stream must not see Alice's events."""
-    req_bob = _FakeRequest(headers={"X-User-ID": "bob"})
-    gen = browser_routes._event_stream("bob", req_bob)
+    gen = browser_routes._event_stream("bob")
 
     fresh_broker.start_session("alice")
     fresh_broker.push_frame("alice", "A1")
@@ -83,16 +81,36 @@ async def test_event_stream_isolates_users(fresh_broker):
 
 
 @pytest.mark.asyncio
-async def test_event_stream_exits_on_disconnect(fresh_broker, monkeypatch):
-    """When the client disconnects, the generator must exit during the poll."""
-    # Shrink the poll so the test doesn't wait a full second.
-    monkeypatch.setattr(browser_routes, "_DISCONNECT_POLL_SECONDS", 0.01)
+async def test_event_stream_emits_keepalive_when_idle(fresh_broker, monkeypatch):
+    """When no events arrive, the stream sends an SSE comment line to keep
+    the connection warm rather than yielding nothing or exiting."""
+    monkeypatch.setattr(browser_routes, "_KEEPALIVE_SECONDS", 0.05)
+    gen = browser_routes._event_stream("idle")
 
-    req = _FakeRequest(headers={"X-User-ID": "ghost"}, disconnected=True)
-    gen = browser_routes._event_stream("ghost", req)
+    first = await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+    assert first.startswith(":")  # SSE comment line
+    assert first.endswith("\n\n")
+    await gen.aclose()
 
-    with pytest.raises(StopAsyncIteration):
-        await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+
+@pytest.mark.asyncio
+async def test_event_stream_closes_cleanly_on_cancel(fresh_broker):
+    """Cancelling the consuming task (FastAPI-side disconnect) must not raise
+    a bubbling exception out of the generator."""
+    gen = browser_routes._event_stream("zombie")
+    consume_task = asyncio.create_task(gen.__anext__())
+    await asyncio.sleep(0.01)
+    consume_task.cancel()
+    with contextlib_suppress(asyncio.CancelledError, StopAsyncIteration):
+        await consume_task
+    # gen.aclose() can now run because the inner await was cancelled.
+    await gen.aclose()
+
+
+def contextlib_suppress(*exc_types):
+    import contextlib
+
+    return contextlib.suppress(*exc_types)
 
 
 def test_resolve_user_id_prefers_header():

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
@@ -19,11 +20,12 @@ from config_module.loader import config
 from tool_module.browser_stream import broker
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-# How often to wake and check whether the client has disconnected while we
-# wait for the next broker event. Without this poll the handler can sit
-# forever in `subscribe()`'s queue.get() after a quiet client goes away.
-_DISCONNECT_POLL_SECONDS = 1.0
+# Cadence of the SSE keep-alive comment line. Without periodic bytes some
+# proxies/load balancers and even some browsers' EventSource drop idle
+# connections after ~30s; the comment is invisible to the consumer.
+_KEEPALIVE_SECONDS = 15.0
 
 
 def _resolve_user_id(request: Request) -> str:
@@ -35,21 +37,32 @@ def _resolve_user_id(request: Request) -> str:
 @router.get("/v1/browser/stream")
 async def browser_stream(request: Request) -> StreamingResponse:
     user_id = _resolve_user_id(request)
+    logger.info("browser_stream: subscribe user_id=%s", user_id)
+    return StreamingResponse(_event_stream(user_id), media_type="text/event-stream")
 
-    return StreamingResponse(_event_stream(user_id, request), media_type="text/event-stream")
 
+async def _event_stream(user_id: str):
+    """Yield SSE frames for `user_id`.
 
-async def _event_stream(user_id: str, request: Request):
-    sub = broker.subscribe(user_id).__aiter__()
-    while True:
-        try:
-            event = await asyncio.wait_for(sub.__anext__(), timeout=_DISCONNECT_POLL_SECONDS)
-        except TimeoutError:
-            if await request.is_disconnected():
+    Relies on FastAPI/Starlette to cancel this generator when the client
+    disconnects — no manual is_disconnected() polling, which we observed
+    spuriously firing under some uvicorn versions and killing the stream
+    before the first real event. Sends an SSE comment line every
+    _KEEPALIVE_SECONDS so intermediaries don't time the connection out.
+    """
+    sub_iter = broker.subscribe(user_id).__aiter__()
+    try:
+        while True:
+            try:
+                event = await asyncio.wait_for(sub_iter.__anext__(), timeout=_KEEPALIVE_SECONDS)
+            except TimeoutError:
+                # SSE comment line — keeps the connection warm; consumers ignore it.
+                yield ": keepalive\n\n"
+                continue
+            except StopAsyncIteration:
                 break
-            continue
-        except StopAsyncIteration:
-            break
-        if await request.is_disconnected():
-            break
-        yield f"data: {json.dumps(event)}\n\n"
+            yield f"data: {json.dumps(event)}\n\n"
+    except asyncio.CancelledError:
+        # Client disconnected; let the generator close cleanly.
+        logger.info("browser_stream: unsubscribe user_id=%s", user_id)
+        raise
