@@ -78,6 +78,23 @@ Configuration (env):
                                    cookie banners, never ask the user
                                    mid-task, prefer direct URLs over
                                    search-engine indirection).
+  BROWSER_USE_MESSAGE_COMPACTION    "1" to let browser-use compact the
+                                   message history once it grows past a
+                                   threshold (default "1" — required for
+                                   any task longer than ~10 steps to
+                                   avoid blowing the model's context).
+                                   Flip to "0" only to debug a step.
+  BROWSER_USE_LOOP_DETECTION        "1" to enable browser-use's loop
+                                   detector (default "1"). Disabling it
+                                   on purposefully-repetitive tasks (e.g.
+                                   pagination scrapes) avoids false
+                                   positives.
+  BROWSER_USE_LOOP_WINDOW           number of trailing steps inspected
+                                   for repetition (default 20).
+  BROWSER_USE_MAX_HISTORY_ITEMS     hard cap on how many past steps are
+                                   kept in the agent's working context
+                                   after compaction. Unset = unlimited
+                                   (browser-use default).
 """
 
 from __future__ import annotations
@@ -328,6 +345,11 @@ async def run_browser_task(user_id: str, task: str) -> str:
     flash_mode = _bool_env("BROWSER_USE_FLASH_MODE", default=False)
     include_recent_events = _bool_env("BROWSER_USE_INCLUDE_RECENT_EVENTS", default=False)
     extra_guidance = _extra_guidance()
+    message_compaction = _bool_env("BROWSER_USE_MESSAGE_COMPACTION", default=True)
+    loop_detection_enabled = _bool_env("BROWSER_USE_LOOP_DETECTION", default=True)
+    loop_detection_window = int(os.environ.get("BROWSER_USE_LOOP_WINDOW", "20"))
+    max_history_items_raw = os.environ.get("BROWSER_USE_MAX_HISTORY_ITEMS")
+    max_history_items = int(max_history_items_raw) if max_history_items_raw else None
 
     effective_cdp_url = _augment_cdp_url(cdp_url)
     browser = Browser(cdp_url=effective_cdp_url, is_local=False)
@@ -347,6 +369,10 @@ async def run_browser_task(user_id: str, task: str) -> str:
         "flash_mode": flash_mode,
         "include_recent_events": include_recent_events,
         "extend_system_message": extra_guidance,
+        "message_compaction": message_compaction,
+        "loop_detection_enabled": loop_detection_enabled,
+        "loop_detection_window": loop_detection_window,
+        "max_history_items": max_history_items,
     }
     agent = _build_agent(Agent, agent_kwargs)
 
