@@ -61,6 +61,16 @@ Configuration (env):
                                    triggers a planning replan (default 3).
   BROWSER_USE_EXPLORATION_LIMIT    steps between planning passes during
                                    normal progress (default 5).
+  BROWSER_USE_FLASH_MODE           "1" to enable browser-use's flash mode,
+                                   which trims the per-step prompt and skips
+                                   some judgment passes for faster, lighter
+                                   automation on simple tasks (default "0",
+                                   the safer choice for diverse tasks).
+  BROWSER_USE_INCLUDE_RECENT_EVENTS  "1" to surface recent browser-side
+                                   events (network errors, navigation
+                                   commits, alert dialogs) to the agent
+                                   each step. Helps recovery from page-load
+                                   races. Default "0" — matches browser-use.
 """
 
 from __future__ import annotations
@@ -280,6 +290,8 @@ async def run_browser_task(user_id: str, task: str) -> str:
     enable_planning = _bool_env("BROWSER_USE_ENABLE_PLANNING", default=True)
     replan_on_stall = int(os.environ.get("BROWSER_USE_REPLAN_ON_STALL", "3"))
     exploration_limit = int(os.environ.get("BROWSER_USE_EXPLORATION_LIMIT", "5"))
+    flash_mode = _bool_env("BROWSER_USE_FLASH_MODE", default=False)
+    include_recent_events = _bool_env("BROWSER_USE_INCLUDE_RECENT_EVENTS", default=False)
 
     effective_cdp_url = _augment_cdp_url(cdp_url)
     browser = Browser(cdp_url=effective_cdp_url, is_local=False)
@@ -296,6 +308,8 @@ async def run_browser_task(user_id: str, task: str) -> str:
         "enable_planning": enable_planning,
         "planning_replan_on_stall": replan_on_stall,
         "planning_exploration_limit": exploration_limit,
+        "flash_mode": flash_mode,
+        "include_recent_events": include_recent_events,
     }
     agent = _build_agent(Agent, agent_kwargs)
 
