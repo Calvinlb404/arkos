@@ -113,6 +113,7 @@ import logging
 import os
 from typing import Any
 
+from tool_module.browser_actions import build_arkos_tools
 from tool_module.browser_stream import broker as _stream_broker
 
 logger = logging.getLogger(__name__)
@@ -395,6 +396,8 @@ async def run_browser_task(user_id: str, task: str) -> str:
     if allowed_domains:
         browser_kwargs["allowed_domains"] = allowed_domains
     browser = _build_browser(Browser, browser_kwargs)
+
+    arkos_tools = build_arkos_tools() if _bool_env("BROWSER_USE_CUSTOM_TOOLS", default=True) else None
     agent_kwargs: dict[str, Any] = {
         "task": task,
         "llm": ChatOpenAI(model=llm_model, base_url=llm_base_url, api_key=llm_api_key),
@@ -416,6 +419,8 @@ async def run_browser_task(user_id: str, task: str) -> str:
         "loop_detection_window": loop_detection_window,
         "max_history_items": max_history_items,
     }
+    if arkos_tools is not None:
+        agent_kwargs["tools"] = arkos_tools
     agent = _build_agent(Agent, agent_kwargs)
 
     screencast_task: asyncio.Task[None] | None = None
