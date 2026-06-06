@@ -102,7 +102,11 @@ services:
       - "3000:3000"
     environment:
       - CONCURRENT=${BROWSERLESS_CONCURRENT:-10}
-      - TIMEOUT=${BROWSERLESS_TIMEOUT:-60000}
+      # TIMEOUT must be strictly greater than browser_task's wall-clock cap
+      # (BROWSER_USE_MAX_SECONDS, default 180s). If Browserless wins the
+      # race, the app reports 'wall-clock exceeded' when the real cause was
+      # the container killing the session — wrong diagnosis to ship.
+      - TIMEOUT=${BROWSERLESS_TIMEOUT:-300000}
     restart: unless-stopped
     networks:
       - arkos-network
