@@ -95,6 +95,14 @@ Configuration (env):
                                    kept in the agent's working context
                                    after compaction. Unset = unlimited
                                    (browser-use default).
+  BROWSER_USE_ALLOWED_DOMAINS       comma-separated list of domain
+                                   patterns the agent is allowed to
+                                   navigate to. Supports glob style
+                                   ("https://*.example.com"). Empty
+                                   (default) = unrestricted. Off-list
+                                   navigations are rejected by the
+                                   BrowserSession before they reach the
+                                   network.
 """
 
 from __future__ import annotations
@@ -268,6 +276,36 @@ def _augment_cdp_url(url: str) -> str:
     return urlunparse(parts._replace(query=urlencode(query)))
 
 
+def _parse_allowed_domains(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
+def _build_browser(browser_cls: Any, kwargs: dict[str, Any]) -> Any:
+    """Construct a browser-use Browser, dropping kwargs the installed version
+    doesn't accept. Same shape as _build_agent but for the Browser side."""
+    import inspect
+
+    try:
+        sig = inspect.signature(browser_cls.__init__)
+        params = sig.parameters
+    except (TypeError, ValueError):
+        return browser_cls(**kwargs)
+
+    accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    accepted: dict[str, Any] = {}
+    dropped: list[str] = []
+    for k, v in kwargs.items():
+        if k == "cdp_url" or k in params or accepts_kwargs:
+            accepted[k] = v
+        else:
+            dropped.append(k)
+    if dropped:
+        logger.info("browser_tool: Browser does not accept %s; dropping", dropped)
+    return browser_cls(**accepted)
+
+
 _REQUIRED_AGENT_KWARGS = frozenset({"task", "llm", "browser"})
 
 
@@ -352,7 +390,11 @@ async def run_browser_task(user_id: str, task: str) -> str:
     max_history_items = int(max_history_items_raw) if max_history_items_raw else None
 
     effective_cdp_url = _augment_cdp_url(cdp_url)
-    browser = Browser(cdp_url=effective_cdp_url, is_local=False)
+    allowed_domains = _parse_allowed_domains(os.environ.get("BROWSER_USE_ALLOWED_DOMAINS"))
+    browser_kwargs: dict[str, Any] = {"cdp_url": effective_cdp_url, "is_local": False}
+    if allowed_domains:
+        browser_kwargs["allowed_domains"] = allowed_domains
+    browser = _build_browser(Browser, browser_kwargs)
     agent_kwargs: dict[str, Any] = {
         "task": task,
         "llm": ChatOpenAI(model=llm_model, base_url=llm_base_url, api_key=llm_api_key),

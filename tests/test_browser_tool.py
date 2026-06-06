@@ -689,6 +689,61 @@ def test_augment_cdp_url_no_op_when_disabled(monkeypatch):
     assert _augment_cdp_url("ws://browserless:3000") == "ws://browserless:3000"
 
 
+def test_parse_allowed_domains_handles_empty_and_csv():
+    from tool_module.browser_tool import _parse_allowed_domains
+
+    assert _parse_allowed_domains(None) == []
+    assert _parse_allowed_domains("") == []
+    assert _parse_allowed_domains("https://example.com") == ["https://example.com"]
+    assert _parse_allowed_domains("https://a.com, https://*.b.com ,") == [
+        "https://a.com",
+        "https://*.b.com",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_browser_tool_passes_allowed_domains_to_browser(monkeypatch):
+    captured: dict[str, object] = {}
+
+    fake_browser_use = types.ModuleType("browser_use")
+
+    class FakeBrowser:
+        def __init__(self, cdp_url=None, is_local=True, allowed_domains=None):
+            captured["allowed_domains"] = allowed_domains
+
+        async def close(self):
+            pass
+
+    class FakeHistory:
+        def final_result(self):
+            return "ok"
+
+    class FakeAgent:
+        def __init__(self, task, llm, browser, **_):
+            pass
+
+        async def run(self, max_steps=None):
+            return FakeHistory()
+
+    class FakeChatOpenAI:
+        def __init__(self, model, base_url=None, api_key=None):
+            pass
+
+    fake_browser_use.Agent = FakeAgent
+    fake_browser_use.Browser = FakeBrowser
+    fake_browser_use.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "browser_use", fake_browser_use)
+
+    monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
+    monkeypatch.setenv("BROWSER_USE_ALLOWED_DOMAINS", "https://example.com, https://*.wikipedia.org")
+    monkeypatch.setenv("BROWSER_STREAM_ENABLED", "0")
+
+    from tool_module.browser_tool import run_browser_task
+
+    await run_browser_task("user_1", "task")
+    assert captured["allowed_domains"] == ["https://example.com", "https://*.wikipedia.org"]
+
+
 def test_augment_cdp_url_idempotent(monkeypatch):
     from tool_module.browser_tool import _augment_cdp_url
 
