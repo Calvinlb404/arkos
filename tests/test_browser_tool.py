@@ -86,6 +86,7 @@ async def test_browser_tool_returns_result(monkeypatch):
     captured = []
     _install_fake_browser_use(monkeypatch, run_side_effect="Example Domain", captured_cdp=captured)
     monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
+    monkeypatch.setenv("BROWSER_USE_STEALTH", "0")  # keep this test's URL assertion stable
 
     result = await run_browser_task("user_1", "go to example.com and return the title")
 
@@ -536,6 +537,40 @@ async def test_browser_tool_passes_agent_config_knobs(monkeypatch):
     assert captured["max_failures"] == 5
     assert captured["max_actions_per_step"] == 8
     assert captured["llm_timeout"] == 30
+
+
+def test_augment_cdp_url_appends_stealth(monkeypatch):
+    """Default behaviour: ?stealth=true is appended."""
+    from tool_module.browser_tool import _augment_cdp_url
+
+    monkeypatch.delenv("BROWSER_USE_STEALTH", raising=False)
+    assert _augment_cdp_url("ws://browserless:3000") == "ws://browserless:3000?stealth=true"
+
+
+def test_augment_cdp_url_preserves_existing_query(monkeypatch):
+    from tool_module.browser_tool import _augment_cdp_url
+
+    monkeypatch.delenv("BROWSER_USE_STEALTH", raising=False)
+    out = _augment_cdp_url("ws://browserless:3000?token=secret")
+    assert "token=secret" in out
+    assert "stealth=true" in out
+
+
+def test_augment_cdp_url_no_op_when_disabled(monkeypatch):
+    from tool_module.browser_tool import _augment_cdp_url
+
+    monkeypatch.setenv("BROWSER_USE_STEALTH", "0")
+    assert _augment_cdp_url("ws://browserless:3000") == "ws://browserless:3000"
+
+
+def test_augment_cdp_url_idempotent(monkeypatch):
+    from tool_module.browser_tool import _augment_cdp_url
+
+    monkeypatch.delenv("BROWSER_USE_STEALTH", raising=False)
+    once = _augment_cdp_url("ws://browserless:3000")
+    twice = _augment_cdp_url(once)
+    # stealth=true should appear exactly once
+    assert twice.count("stealth=true") == 1
 
 
 @pytest.mark.asyncio

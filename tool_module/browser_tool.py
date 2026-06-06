@@ -29,6 +29,13 @@ Configuration (env):
                                    (default 4, matches browser-use).
   BROWSER_USE_LLM_TIMEOUT          per-LLM-call timeout in seconds (default
                                    90, matches browser-use).
+  BROWSER_USE_STEALTH              "1" to ask Browserless to launch the
+                                   sandbox in stealth mode (puppeteer-extra-
+                                   plugin-stealth — helps reduce reCAPTCHA
+                                   detection). Default "1". The flag is
+                                   appended to the CDP URL as ?stealth=true
+                                   and is a no-op against non-Browserless
+                                   CDP endpoints.
 """
 
 from __future__ import annotations
@@ -138,6 +145,27 @@ async def _safe_ack(cdp: Any, session_id: int) -> None:
         await cdp.send("Page.screencastFrameAck", {"sessionId": session_id})
 
 
+def _augment_cdp_url(url: str) -> str:
+    """Append `stealth=true` to a Browserless CDP URL when stealth is enabled.
+
+    Browserless reads query params from the WS handshake; `?stealth=true`
+    launches the session via puppeteer-extra-plugin-stealth, which masks the
+    automation signals that Google/Cloudflare/etc detect to trigger reCAPTCHA.
+
+    No-op against any CDP endpoint that ignores the query string.
+    """
+    if os.environ.get("BROWSER_USE_STEALTH", "1") == "0":
+        return url
+    from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+    parts = urlparse(url)
+    query = dict(parse_qsl(parts.query))
+    if query.get("stealth") == "true":
+        return url
+    query["stealth"] = "true"
+    return urlunparse(parts._replace(query=urlencode(query)))
+
+
 _REQUIRED_AGENT_KWARGS = frozenset({"task", "llm", "browser"})
 
 
@@ -207,7 +235,8 @@ async def run_browser_task(user_id: str, task: str) -> str:
     max_actions_per_step = int(os.environ.get("BROWSER_USE_MAX_ACTIONS_PER_STEP", "4"))
     llm_timeout = int(os.environ.get("BROWSER_USE_LLM_TIMEOUT", "90"))
 
-    browser = Browser(cdp_url=cdp_url, is_local=False)
+    effective_cdp_url = _augment_cdp_url(cdp_url)
+    browser = Browser(cdp_url=effective_cdp_url, is_local=False)
     agent_kwargs: dict[str, Any] = {
         "task": task,
         "llm": ChatOpenAI(model=llm_model, base_url=llm_base_url, api_key=llm_api_key),
