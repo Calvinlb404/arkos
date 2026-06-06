@@ -574,6 +574,107 @@ def test_augment_cdp_url_idempotent(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_browser_tool_defaults_vision_judge_thinking_off(monkeypatch):
+    """For a text-only Qwen, vision/thinking/judge default OFF to save tokens."""
+    captured: dict[str, object] = {}
+
+    fake_browser_use = types.ModuleType("browser_use")
+
+    class FakeBrowser:
+        def __init__(self, cdp_url=None, is_local=True):
+            pass
+
+        async def close(self):
+            pass
+
+    class FakeHistory:
+        def final_result(self):
+            return "ok"
+
+    class FakeAgent:
+        def __init__(self, task, llm, browser, use_vision=True, use_thinking=True, use_judge=True, **_):
+            captured["use_vision"] = use_vision
+            captured["use_thinking"] = use_thinking
+            captured["use_judge"] = use_judge
+
+        async def run(self, max_steps=None):
+            return FakeHistory()
+
+    class FakeChatOpenAI:
+        def __init__(self, model, base_url=None, api_key=None):
+            pass
+
+    fake_browser_use.Agent = FakeAgent
+    fake_browser_use.Browser = FakeBrowser
+    fake_browser_use.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "browser_use", fake_browser_use)
+
+    monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
+    monkeypatch.delenv("BROWSER_USE_VISION", raising=False)
+    monkeypatch.delenv("BROWSER_USE_THINKING", raising=False)
+    monkeypatch.delenv("BROWSER_USE_USE_JUDGE", raising=False)
+    monkeypatch.setenv("BROWSER_STREAM_ENABLED", "0")
+
+    from tool_module.browser_tool import run_browser_task
+
+    await run_browser_task("user_1", "task")
+
+    assert captured["use_vision"] is False
+    assert captured["use_thinking"] is False
+    assert captured["use_judge"] is False
+
+
+@pytest.mark.asyncio
+async def test_browser_tool_vision_judge_thinking_envs_take_effect(monkeypatch):
+    captured: dict[str, object] = {}
+
+    fake_browser_use = types.ModuleType("browser_use")
+
+    class FakeBrowser:
+        def __init__(self, cdp_url=None, is_local=True):
+            pass
+
+        async def close(self):
+            pass
+
+    class FakeHistory:
+        def final_result(self):
+            return "ok"
+
+    class FakeAgent:
+        def __init__(self, task, llm, browser, use_vision=False, use_thinking=False, use_judge=False, **_):
+            captured["use_vision"] = use_vision
+            captured["use_thinking"] = use_thinking
+            captured["use_judge"] = use_judge
+
+        async def run(self, max_steps=None):
+            return FakeHistory()
+
+    class FakeChatOpenAI:
+        def __init__(self, model, base_url=None, api_key=None):
+            pass
+
+    fake_browser_use.Agent = FakeAgent
+    fake_browser_use.Browser = FakeBrowser
+    fake_browser_use.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "browser_use", fake_browser_use)
+
+    monkeypatch.setenv("BROWSERLESS_URL", "ws://browserless:3000")
+    monkeypatch.setenv("BROWSER_USE_VISION", "1")
+    monkeypatch.setenv("BROWSER_USE_THINKING", "true")
+    monkeypatch.setenv("BROWSER_USE_USE_JUDGE", "yes")
+    monkeypatch.setenv("BROWSER_STREAM_ENABLED", "0")
+
+    from tool_module.browser_tool import run_browser_task
+
+    await run_browser_task("user_1", "task")
+
+    assert captured["use_vision"] is True
+    assert captured["use_thinking"] is True
+    assert captured["use_judge"] is True
+
+
+@pytest.mark.asyncio
 async def test_browser_tool_silently_drops_unsupported_kwargs(monkeypatch):
     """Older browser-use versions whose Agent doesn't accept max_failures must
     not crash — the kwargs are introspected and dropped."""

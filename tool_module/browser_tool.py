@@ -36,6 +36,24 @@ Configuration (env):
                                    appended to the CDP URL as ?stealth=true
                                    and is a no-op against non-Browserless
                                    CDP endpoints.
+  BROWSER_USE_VISION               "1" to send screenshots to the LLM on
+                                   every step. Default "0" because arkos's
+                                   default SGLang model (Qwen/Qwen3-8B) is
+                                   text-only — passing images burns prompt
+                                   tokens and the model can't see them.
+                                   Flip to "1" once SGLang serves a VL
+                                   variant (e.g. Qwen3-VL).
+  BROWSER_USE_THINKING             "1" to let browser-use inject its
+                                   <think> scaffold into prompts. Default
+                                   "0" — browser-use's scaffold isn't
+                                   trained into stock Qwen-Instruct and
+                                   adds latency without observable wins.
+  BROWSER_USE_USE_JUDGE            "1" to run browser-use's built-in
+                                   output judge after a task completes.
+                                   Default "0" — the judge defaults to the
+                                   main LLM and only pays off when a
+                                   ground_truth is supplied, which arkos
+                                   doesn't have.
 """
 
 from __future__ import annotations
@@ -57,6 +75,13 @@ class BrowserToolError(RuntimeError):
 
 def _stream_enabled() -> bool:
     return os.environ.get("BROWSER_STREAM_ENABLED", "1") != "0"
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.lower() in {"1", "true", "yes", "on"}
 
 
 def _find_agent_page(agent: Any) -> Any | None:
@@ -234,6 +259,9 @@ async def run_browser_task(user_id: str, task: str) -> str:
     max_failures = int(os.environ.get("BROWSER_USE_MAX_FAILURES", "3"))
     max_actions_per_step = int(os.environ.get("BROWSER_USE_MAX_ACTIONS_PER_STEP", "4"))
     llm_timeout = int(os.environ.get("BROWSER_USE_LLM_TIMEOUT", "90"))
+    use_vision = _bool_env("BROWSER_USE_VISION", default=False)
+    use_thinking = _bool_env("BROWSER_USE_THINKING", default=False)
+    use_judge = _bool_env("BROWSER_USE_USE_JUDGE", default=False)
 
     effective_cdp_url = _augment_cdp_url(cdp_url)
     browser = Browser(cdp_url=effective_cdp_url, is_local=False)
@@ -244,6 +272,9 @@ async def run_browser_task(user_id: str, task: str) -> str:
         "max_failures": max_failures,
         "max_actions_per_step": max_actions_per_step,
         "llm_timeout": llm_timeout,
+        "use_vision": use_vision,
+        "use_thinking": use_thinking,
+        "use_judge": use_judge,
     }
     agent = _build_agent(Agent, agent_kwargs)
 
