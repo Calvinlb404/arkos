@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from base_module.task_store import update_task_status
 from computer_module.agent import ComputerAgent
 from computer_module.sandbox import sandbox_manager
 from computer_module.store import (
@@ -90,14 +91,22 @@ async def run_computer_task(
     summary = result.get("summary", "")
     outputs = result.get("outputs", [])
 
-    # 1. Persist status
+    # Write status + event atomically so a poll can never see the new status
+    # without its corresponding event (ISSUES.md Task 4).
     if status == "completed":
-        set_computer_status(task_id, "completed", summary=summary, outputs=outputs)
+        update_task_status(
+            task_id, "completed",
+            summary=summary, outputs=outputs,
+            event_kind="completed", event_content=summary[:500],
+            event_payload={"outputs": outputs},
+        )
     else:
-        set_computer_status(task_id, "failed", error=summary, outputs=outputs)
-
-    # 2. Final event
-    log_computer_event(task_id, status, summary[:500], {"outputs": outputs})
+        update_task_status(
+            task_id, "failed",
+            error=summary, outputs=outputs,
+            event_kind="failed", event_content=summary[:500],
+            event_payload={"outputs": outputs},
+        )
 
     # 3. Inject the result into the user's chat session so it appears in the conversation.
     await _inject_chat_message(user_id, chat_session_id, status, summary, outputs)

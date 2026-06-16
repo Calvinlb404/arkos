@@ -23,3 +23,19 @@ class ModelError(Exception):
         super().__init__(message)
         self.retryable = retryable
         self.cause = cause
+
+
+class OutputValidationError(Exception):
+    """
+    Raised when the model responded but its output doesn't match the required
+    schema (missing field, bad JSON, truncated object). Distinct from ModelError
+    which signals a transport/API failure.
+
+    detail is model-actionable (e.g. "final: Field required") and safe to feed
+    back into context. raw is the failing string — logged only, never shown.
+    """
+
+    def __init__(self, detail: str, *, raw: str | None = None) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.raw = raw

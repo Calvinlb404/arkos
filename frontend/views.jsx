@@ -110,6 +110,11 @@ function ChatView({ data, onApprovePlan, onDeclinePlan }) {
             <div className={"msg " + (m.who === "you" ? "user" : "buddy")} key={i}>
               <span className="who">{m.who === "you" ? (data.user || "you") : "buddy"}</span>
               {m.text && <span className="bubble">{m.text}</span>}
+              {m.parseError && !m.plan && (
+                <span className="bubble" style={{ color: "var(--err, #c0392b)", fontSize: "0.85em" }}>
+                  ⚠ {m.parseError}
+                </span>
+              )}
               {m.plan && (
                 <PlanCard
                   plan={m.plan}

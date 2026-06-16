@@ -108,9 +108,11 @@ function App() {
   async function refreshAll() {
     const online = await api.health();
 
-    const [running, waiting, approvalsRaw] = await Promise.all([
+    const [running, waiting, done, failed, approvalsRaw] = await Promise.all([
       api.tasks("running"),
       api.tasks("awaiting_approval"),
+      api.tasks("completed"),   // server returns only last 15 min (ISSUES.md Task 1)
+      api.tasks("failed"),      // server returns only last 15 min
       api.pendingApprovals(),
     ]);
 
@@ -125,8 +127,15 @@ function App() {
 
     // One task source: computer tasks are agent_kind='computer' rows in `tasks`
     // (migration 0007), so they arrive here alongside executor tasks.
-    const rawTasks = [...(running.tasks || []), ...(waiting.tasks || [])];
-    // pull events for each live task so the expandable log is real
+    // Terminal tasks (completed/failed) come from the 15-min server window so
+    // they stay visible after finishing instead of vanishing on the next poll.
+    const rawTasks = [
+      ...(running.tasks || []),
+      ...(waiting.tasks || []),
+      ...(done.tasks || []),
+      ...(failed.tasks || []),
+    ];
+    // pull events for each task so the expandable log is real
     const eventsList = await Promise.all(rawTasks.map((t) => api.taskEvents(t.task_id)));
 
     const tasks = rawTasks.map((t, i) => shapeTask(t, eventsList[i]));
@@ -163,13 +172,19 @@ function App() {
   /* ---- approvals ---- */
   async function resolveApproval(id, verb, note) {
     const item = data.approvals.find((a) => a.id === id);
-    // optimistic removal
-    setData((d) => ({ ...d, approvals: d.approvals.filter((a) => a.id !== id) }));
     let body;
     if (item && item.kind === "binary") body = { approved: verb === "approved" };
     else body = { answer: note || (verb === "approved" ? "yes" : "no") };
-    await api.respondApproval(id, body);
-    refreshAll();
+    try {
+      // Remove only AFTER server confirms — respondApproval throws on non-2xx so a
+      // failed call leaves the approval visible and resolvable (no zombie approvals).
+      await api.respondApproval(id, body);
+      setData((d) => ({ ...d, approvals: d.approvals.filter((a) => a.id !== id) }));
+      refreshAll();
+    } catch (e) {
+      console.error("resolveApproval failed:", e);
+      // Approval stays in the list; user can try again.
+    }
   }
 
   /* ---- chat (streaming) ---- */
@@ -206,8 +221,11 @@ function App() {
     }
 
     // split any workshopped plan out of the reply into an approve card
-    const { text: clean, plan } = parsePlan(reply);
-    setData((d) => ({ ...d, chat: [...d.chat, { who: "buddy", text: clean || reply, plan }] }));
+    const { text: clean, plan, parseError } = parsePlan(reply);
+    setData((d) => ({
+      ...d,
+      chat: [...d.chat, { who: "buddy", text: clean || reply, plan, parseError }],
+    }));
     // fold both away, then refresh state (a reply may have spawned tasks)
     setTimeout(() => {
       setFloaters((f) => f.map((x) => (x.id === id || x.id === rId) ? { ...x, fold: true } : x));

@@ -45,17 +45,43 @@ function relTime(iso) {
   return Math.floor(s / 86400) + "d";
 }
 
+/* Repair common model JSON failures before parsing.
+   Strips code fences, fixes trailing commas — the two most frequent causes of
+   parse failures when the model wraps JSON in a fence or adds a trailing comma. */
+function safeJsonParse(raw) {
+  let s = String(raw || "").trim();
+  // Strip ```json...``` or ```...``` fences
+  const fenced = s.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/);
+  if (fenced) s = fenced[1].trim();
+  // Fix trailing commas before } or ]
+  s = s.replace(/,(\s*[}\]])/g, "$1");
+  return s;
+}
+
 /* pull an ```ark-plan {json}``` block out of a buddy reply.
-   returns { text: reply with the fenced block removed, plan: obj|null } */
+   returns { text: reply with the fenced block removed, plan: obj|null, parseError: str|null }
+   parseError is non-null when a fence was found but could not be parsed — the caller
+   should render it as an inline affordance so the user knows approval is unavailable. */
 function parsePlan(s) {
   const str = String(s || "");
   const m = str.match(/```ark-plan\s*\n([\s\S]*?)\n```/);
-  if (!m) return { text: str, plan: null };
+  if (!m) return { text: str, plan: null, parseError: null };
   let plan = null;
-  try { plan = JSON.parse(m[1]); } catch { return { text: str, plan: null }; }
-  // drop malformed blocks (matches the original app.js guard); the prose above still shows
-  if (!plan || !Array.isArray(plan.plan_steps)) return { text: str.replace(m[0], "").trim(), plan: null };
-  return { text: str.replace(m[0], "").trim(), plan };
+  try { plan = JSON.parse(safeJsonParse(m[1])); } catch {
+    return {
+      text: str.replace(m[0], "").trim(),
+      plan: null,
+      parseError: "couldn't parse plan — try asking buddy again",
+    };
+  }
+  if (!plan || !Array.isArray(plan.plan_steps)) {
+    return {
+      text: str.replace(m[0], "").trim(),
+      plan: null,
+      parseError: "plan was malformed — try asking buddy again",
+    };
+  }
+  return { text: str.replace(m[0], "").trim(), plan, parseError: null };
 }
 
 /* kind -> short glyph for the activity / event stream */
@@ -171,13 +197,14 @@ const api = {
   },
 
   async respondApproval(approvalId, body) {
-    try {
-      await fetch(`${CONFIG.backend}/tasks/approvals/${encodeURIComponent(approvalId)}/respond`, {
-        method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify(body),
-      });
-    } catch (e) { console.warn("respondApproval", e); }
+    // Throws on failure so the caller knows the approval was NOT recorded and
+    // can restore it in the UI (no silent zombie approvals).
+    const r = await fetch(`${CONFIG.backend}/tasks/approvals/${encodeURIComponent(approvalId)}/respond`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`approval failed: ${r.status}`);
   },
 
   async cancelTask(id) {
@@ -193,7 +220,7 @@ const api = {
   async dispatchComputer(prompt) {
     const r = await fetch(`${CONFIG.backend}/computer/tasks`, {
       method: "POST",
-      headers: authHeaders({ "Content-Type": "application/json", "X-User-ID": CONFIG.userId }),
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ prompt }),
     });
     if (!r.ok) throw new Error("dispatch failed: " + r.status);
@@ -202,7 +229,7 @@ const api = {
   async createTask(plan) {
     const r = await fetch(`${CONFIG.backend}/tasks`, {
       method: "POST",
-      headers: authHeaders({ "Content-Type": "application/json", "X-User-ID": CONFIG.userId }),
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         title: plan.title,
         plan_steps: plan.plan_steps || [],
@@ -263,8 +290,8 @@ const api = {
   async chatStream(messages, onDelta, onStatus) {
     const res = await fetch(CONFIG.backend + "/v1/chat/completions", {
       method: "POST",
-      headers: authHeaders({ "Content-Type": "application/json", "X-User-ID": CONFIG.userId }),
-      body: JSON.stringify({ model: CONFIG.model, stream: true, user: CONFIG.userId, messages }),
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ model: CONFIG.model, stream: true, messages }),
     });
     if (!res.ok || !res.body) throw new Error("stream failed: " + res.status);
     const reader = res.body.getReader();
@@ -294,4 +321,4 @@ const api = {
   },
 };
 
-Object.assign(window, { CONFIG, authHeaders, backendHost, relTime, parsePlan, KIND_ICON, WATCHING, emptyData, api });
+Object.assign(window, { CONFIG, authHeaders, backendHost, relTime, safeJsonParse, parsePlan, KIND_ICON, WATCHING, emptyData, api });

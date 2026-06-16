@@ -16,6 +16,7 @@ import json as _json
 from pydantic import BaseModel, Field
 
 from model_module.ArkModelNew import SystemMessage
+from model_module.llm_json import parse_llm_json
 from state_module.core.base_state import StateOutput
 from state_module.core.state import State
 from state_module.core.state_registry import register_state
@@ -69,20 +70,7 @@ class StatePlan(State):
         }
 
         output = await agent.call_llm(context=[system] + messages, json_schema=schema)
-        if not output or not output.content:
-            return StateOutput(
-                content="I couldn't draft a plan. Can you rephrase?",
-                completion_signal="needs_input",
-            )
-
-        try:
-            plan = WorkshopOutput.model_validate_json(output.content)
-        except Exception as e:
-            return StateOutput(
-                content=output.content,
-                completion_signal="needs_input",
-                error_detail=f"plan parse failed: {e}",
-            )
+        plan = parse_llm_json(output.content if output else None, WorkshopOutput)
 
         if plan.needs_clarification and plan.clarifying_question:
             return StateOutput(

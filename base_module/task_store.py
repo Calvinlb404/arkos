@@ -78,12 +78,83 @@ def list_events(task_id: str, user_id: str, after_id: int = 0) -> list[dict[str,
 
 
 # ---------- task status ------------------------------------------------------
+def update_task_status(
+    task_id: str,
+    status: str,
+    *,
+    summary: str | None = None,
+    error: str | None = None,
+    outputs: list[str] | None = None,
+    event_kind: str | None = None,
+    event_content: str = "",
+    event_payload: dict[str, Any] | None = None,
+) -> None:
+    """Atomic: write status + context_payload + one event row in one transaction.
+
+    This is the single correct writer for task status. Using set_task_status,
+    mark_task_completed, or mark_task_failed directly is fine for simple cases
+    but those write status and event separately — a poll can see the new status
+    before its event exists. update_task_status closes that window.
+
+    event_kind defaults to the status value when omitted.
+    """
+    ev_kind = event_kind or status
+    outputs_json = json.dumps(outputs) if outputs is not None else None
+
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            if status == "completed":
+                cur.execute(
+                    """
+                    UPDATE tasks
+                    SET status = 'completed',
+                        updated_at = now(),
+                        context_payload = jsonb_set(
+                            jsonb_set(context_payload, '{summary}', to_jsonb(%s::text), true),
+                            '{outputs}', COALESCE(%s::jsonb, context_payload->'outputs', '[]'::jsonb), true
+                        )
+                    WHERE task_id = %s
+                    """,
+                    (summary or "", outputs_json, task_id),
+                )
+            elif status == "failed":
+                cur.execute(
+                    """
+                    UPDATE tasks
+                    SET status = 'failed',
+                        updated_at = now(),
+                        context_payload = jsonb_set(
+                            jsonb_set(context_payload, '{error}', to_jsonb(%s::text), true),
+                            '{outputs}', COALESCE(%s::jsonb, context_payload->'outputs', '[]'::jsonb), true
+                        )
+                    WHERE task_id = %s
+                    """,
+                    (error or "", outputs_json, task_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE tasks SET status = %s, updated_at = now() WHERE task_id = %s",
+                    (status, task_id),
+                )
+            cur.execute(
+                """
+                INSERT INTO task_events (task_id, kind, content, payload)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (task_id, ev_kind, event_content, json.dumps(event_payload or {})),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+
 def set_task_status(task_id: str, status: str) -> None:
     conn = _connect()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE tasks SET status = %s WHERE task_id = %s",
+                "UPDATE tasks SET status = %s, updated_at = now() WHERE task_id = %s",
                 (status, task_id),
             )
             conn.commit()
@@ -103,6 +174,7 @@ def mark_task_completed(
                 """
                 UPDATE tasks
                 SET status = 'completed',
+                    updated_at = now(),
                     context_payload = jsonb_set(
                         jsonb_set(context_payload, '{summary}', to_jsonb(%s::text), true),
                         '{outputs}', COALESCE(%s::jsonb, context_payload->'outputs', '[]'::jsonb), true
@@ -124,6 +196,7 @@ def mark_task_failed(task_id: str, error: str, outputs: list[str] | None = None)
                 """
                 UPDATE tasks
                 SET status = 'failed',
+                    updated_at = now(),
                     context_payload = jsonb_set(
                         jsonb_set(context_payload, '{error}', to_jsonb(%s::text), true),
                         '{outputs}', COALESCE(%s::jsonb, context_payload->'outputs', '[]'::jsonb), true

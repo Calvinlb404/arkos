@@ -239,6 +239,10 @@ async def list_tasks(
     conn = _connect()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Terminal statuses are bounded to the last 15 minutes so the list never
+            # grows unbounded. Live statuses (running, awaiting_approval, pending)
+            # are always returned in full.
+            _TERMINAL = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
             if status is None:
                 cur.execute(
                     """
@@ -246,10 +250,27 @@ async def list_tasks(
                            session_id, agent_kind, parent_task_id, created_at, updated_at
                     FROM tasks
                     WHERE user_id = %s
+                      AND (
+                        status NOT IN ('completed', 'failed', 'cancelled')
+                        OR updated_at >= now() - interval '15 minutes'
+                      )
                     ORDER BY created_at DESC
                     LIMIT 200
                     """,
                     (str(user_uuid),),
+                )
+            elif status in _TERMINAL:
+                cur.execute(
+                    """
+                    SELECT task_id, user_id, status, required_tools, context_payload,
+                           session_id, agent_kind, parent_task_id, created_at, updated_at
+                    FROM tasks
+                    WHERE user_id = %s AND status = %s
+                      AND updated_at >= now() - interval '15 minutes'
+                    ORDER BY created_at DESC
+                    LIMIT 200
+                    """,
+                    (str(user_uuid), status.value),
                 )
             else:
                 cur.execute(

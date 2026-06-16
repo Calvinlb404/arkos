@@ -25,6 +25,7 @@ except ImportError:  # Python < 3.11 (test environments only)
 from pydantic import BaseModel, Field
 
 from model_module.ArkModelNew import SystemMessage
+from model_module.llm_json import parse_llm_json
 from state_module.core.base_state import StateOutput
 from state_module.core.state import State
 from state_module.core.state_registry import register_state
@@ -109,25 +110,9 @@ class StateAI(State):
         system = SystemMessage(content="\n\n".join(system_parts))
         output = await agent.call_llm(context=[system] + messages, json_schema=json_schema)
 
-        if not output or not output.content:
-            return StateOutput(
-                content="I had trouble forming a response. Could you rephrase?",
-                completion_signal="error",
-                error_detail="LLM returned empty content",
-                structured_data={"route": "ask"},
-            )
-
-        try:
-            data = ReasonedOutput.model_validate_json(output.content)
-        except Exception as e:
-            import logging as _logging
-            _logging.getLogger(__name__).warning("state_ai schema parse failed: %s", e)
-            return StateOutput(
-                content=output.content or "",
-                completion_signal="error",
-                error_detail=str(e),
-                structured_data={"route": "ask"},
-            )
+        # parse_llm_json repairs common model failures then validates;
+        # raises OutputValidationError (caught by _run_state for rerun/recovery).
+        data = parse_llm_json(output.content if output else None, ReasonedOutput)
 
         user_text = (data.final or "").strip() or "(no content)"
 

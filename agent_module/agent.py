@@ -394,8 +394,11 @@ class Agent:
                     await self.add_context([AIMessage(content=update.content)])
 
             if update and update.completion_signal == "error" and not self.current_state.is_terminal:
-                # Route errors back to the reply state rather than crashing.
-                self.current_state = self.flow.get_state("agent_reply")
+                # Route errors to the reply state when it exists (buddy graph).
+                # The executor graph has no "agent_reply" — fall through to
+                # terminal so the task is marked model_error instead of crashing.
+                if "agent_reply" in self.flow.states:
+                    self.current_state = self.flow.get_state("agent_reply")
                 self.terminal_reason = TerminalReason.model_error
                 break
 

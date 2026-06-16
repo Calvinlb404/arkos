@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from model_module.ArkModelNew import AIMessage, SystemMessage
+from model_module.errors import OutputValidationError
 from state_module.agent_buddy.state_ai import ReasonedOutput, StateAI
 from state_module.agent_buddy.state_tool import StateTool
 from state_module.agent_buddy.state_user import StateUser
@@ -157,30 +158,28 @@ class TestStateAI:
         assert result.structured_data["route"] == "reply"
 
     @pytest.mark.asyncio
-    async def test_run_with_invalid_json_falls_back(self):
+    async def test_run_with_invalid_json_raises_for_rerun(self):
         sa = StateAI("reasoning", {})
         mock_agent = MagicMock()
         mock_agent.system_prompt = ""
         mock_agent.call_llm = AsyncMock(return_value=AIMessage(content="not valid json at all"))
 
-        result = await sa.run([], mock_agent)
-        assert isinstance(result, StateOutput)
-        # Soft fallback: surface the raw content, hand back to the user.
-        assert result.content == "not valid json at all"
-        # Router pattern: fallback emits route="ask" signal.
-        assert result.structured_data["route"] == "ask"
+        # Raises so _run_state can rerun with the error fed back; raw content
+        # is quarantined in .raw and never surfaces to the user.
+        with pytest.raises(OutputValidationError) as exc_info:
+            await sa.run([], mock_agent)
+        assert exc_info.value.raw == "not valid json at all"
+        assert exc_info.value.detail != "not valid json at all"
 
     @pytest.mark.asyncio
-    async def test_run_with_none_content(self):
+    async def test_run_with_none_content_raises_for_rerun(self):
         sa = StateAI("reasoning", {})
         mock_agent = MagicMock()
         mock_agent.system_prompt = ""
         mock_agent.call_llm = AsyncMock(return_value=AIMessage(content=None))
 
-        result = await sa.run([], mock_agent)
-        assert isinstance(result, StateOutput)
-        assert "rephrase" in result.content.lower() or "trouble" in result.content.lower()
-        assert result.completion_signal == "error"
+        with pytest.raises(OutputValidationError):
+            await sa.run([], mock_agent)
 
     @pytest.mark.asyncio
     async def test_run_routes_plan_to_workshop(self):

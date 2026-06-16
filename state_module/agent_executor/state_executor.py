@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from base_module.task_store import log_event
 from model_module.ArkModelNew import SystemMessage
+from model_module.llm_json import parse_llm_json
 from state_module.core.base_state import StateOutput
 from state_module.core.state import State
 from state_module.core.state_registry import register_state
@@ -120,17 +121,9 @@ class StateExecutor(State):
         }
 
         output = await agent.call_llm(context=[system], json_schema=schema)
-        try:
-            decision = ExecutorDecision.model_validate_json(output.content if output else "")
-        except Exception as e:
-            if task_id:
-                log_event(task_id, "error", f"executor decision parse failed: {e}")
-            decision = ExecutorDecision(
-                action=_ActionKind.ask,
-                reason=f"could not parse decision: {e}",
-                ask_kind=_AskKind.text,
-                ask_prompt=f"I'm stuck on step {step_idx + 1}: {current_step}. How should I proceed?",
-            )
+        # parse_llm_json raises OutputValidationError on failure; _run_state
+        # catches it and produces an error StateOutput rather than crashing.
+        decision = parse_llm_json(output.content if output else None, ExecutorDecision)
 
         if task_id:
             log_event(

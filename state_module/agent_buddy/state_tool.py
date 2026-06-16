@@ -80,10 +80,15 @@ class StateTool(State):
         args_context = context + [SystemMessage(content=args_prompt)]
         args_output = await agent.call_llm(args_context, tool_args_schema)
 
-        # Args schema is dynamic so we accept the raw dict; fall back to empty on bad parse.
+        # Args schema is dynamic — repair then parse; fall back to {} on failure.
         import json as _json
         try:
-            tool_args = _json.loads(args_output.content or "{}")
+            from json_repair import repair_json  # type: ignore[import]
+            raw_args = repair_json(args_output.content or "{}", return_objects=False)
+        except Exception:
+            raw_args = args_output.content or "{}"
+        try:
+            tool_args = _json.loads(raw_args)
         except (ValueError, TypeError):
             logger.warning("could not parse tool args for %s, using empty args", tool_name)
             tool_args = {}
