@@ -12,7 +12,13 @@ function PageHead({ title, accent, lede }) {
 }
 
 /* ---------- DESK ---------- */
-function DeskView({ data, onResolve }) {
+function DeskView({ data, onResolve, dismissed, onDismiss }) {
+  const activeTasks = data.tasks.filter((t) => t.state === "run");
+  const completedTasks = data.tasks.filter(
+    (t) => (t.state === "done" || t.state === "stop") && !dismissed.has(t.id)
+  );
+  const pendingCount = data.approvals.length + completedTasks.length;
+
   return (
     <div className="view">
       <PageHead
@@ -23,24 +29,27 @@ function DeskView({ data, onResolve }) {
         <section className="zone">
           <header>
             <span className="kicker">pending approvals</span>
-            <span className="n">{data.approvals.length}</span>
+            <span className="n">{pendingCount}</span>
           </header>
           <div className="stack">
-            {data.approvals.length === 0
+            {pendingCount === 0
               ? <Empty glyph="✓">nothing waiting on you</Empty>
-              : data.approvals.map((a) => <ApprovalCard key={a.id} item={a} onResolve={onResolve} />)}
+              : <>
+                  {data.approvals.map((a) => <ApprovalCard key={a.id} item={a} onResolve={onResolve} />)}
+                  {completedTasks.map((t) => <CompletedTaskCard key={t.id} item={t} onDismiss={onDismiss} />)}
+                </>}
           </div>
         </section>
 
         <section className="zone">
           <header>
             <span className="kicker">active tasks</span>
-            <span className="n">{data.tasks.filter((t) => t.state === "run").length}</span>
+            <span className="n">{activeTasks.length}</span>
           </header>
           <div className="stack">
-            {data.tasks.length === 0
+            {activeTasks.length === 0
               ? <Empty glyph="○">buddy is idle</Empty>
-              : data.tasks.map((t) => <TaskRow key={t.id} item={t} />)}
+              : activeTasks.map((t) => <TaskRow key={t.id} item={t} />)}
           </div>
         </section>
 

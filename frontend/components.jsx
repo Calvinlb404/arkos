@@ -139,6 +139,49 @@ function TaskRow({ item }) {
   );
 }
 
+/* ---- completed task card — shown in the pending approvals zone on the desk.
+   Dismissed client-side (per session); clicking dismiss calls onDismiss(id). ---- */
+function CompletedTaskCard({ item, onDismiss }) {
+  const [gone, setGone] = useState(false);
+  const ref = useRef(null);
+  const failed = item.state === "stop";
+
+  function dismiss() {
+    if (ref.current) {
+      ref.current.style.transition = "opacity .3s, max-height .35s, padding .35s, margin .35s, border-color .35s";
+      ref.current.style.maxHeight = ref.current.offsetHeight + "px";
+      requestAnimationFrame(() => {
+        ref.current.style.maxHeight = "0px";
+        ref.current.style.opacity = "0";
+        ref.current.style.paddingTop = "0px";
+        ref.current.style.paddingBottom = "0px";
+        ref.current.style.marginBottom = "-12px";
+        ref.current.style.borderColor = "transparent";
+      });
+    }
+    setGone(true);
+    setTimeout(() => onDismiss(item.id), 360);
+  }
+
+  return (
+    <div className="card approval" ref={ref} style={{ overflow: "hidden" }}>
+      <div className="top">
+        <span className="src">
+          <Dot kind={failed ? "stop" : "live"} /> {failed ? "failed" : "done"}
+        </span>
+        <span className="tag" style={{ color: failed ? "var(--err,#c0392b)" : "var(--acc,#4ade80)" }}>
+          {failed ? "✗ failed" : "✓ completed"}
+        </span>
+      </div>
+      <div className="title">{item.text}</div>
+      <div className="actions">
+        <span className="grow" />
+        <button className="btn primary" disabled={gone} onClick={dismiss}>dismiss →</button>
+      </div>
+    </div>
+  );
+}
+
 /* ---- watch row ---- */
 function WatchRow({ item }) {
   return (
@@ -152,4 +195,4 @@ function WatchRow({ item }) {
   );
 }
 
-Object.assign(window, { Dot, Empty, ApprovalCard, PlanCard, TaskRow, WatchRow });
+Object.assign(window, { Dot, Empty, ApprovalCard, PlanCard, TaskRow, WatchRow, CompletedTaskCard });

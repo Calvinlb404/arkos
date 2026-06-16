@@ -47,6 +47,9 @@ function App() {
   const [settings, setSettings] = useState(false);
   const [data, setData] = useState(emptyData);
   const [floaters, setFloaters] = useState([]);
+  // Completed/failed task IDs dismissed by the user this session.
+  // Dismissed tasks are hidden from the desk's pending-approvals zone.
+  const [dismissed, setDismissed] = useState(() => new Set());
   const inputRef = useRef(null);
   const pollRef = useRef(null);
 
@@ -266,8 +269,12 @@ function App() {
     }));
   }
 
+  function dismissTask(id) {
+    setDismissed((s) => new Set([...s, id]));
+  }
+
   const views = {
-    desk: <DeskView data={data} onResolve={resolveApproval} />,
+    desk: <DeskView data={data} onResolve={resolveApproval} dismissed={dismissed} onDismiss={dismissTask} />,
     tasks: <TasksView data={data} />,
     watching: <WatchingView data={data} />,
     approvals: <ApprovalsView data={data} onResolve={resolveApproval} />,
@@ -275,7 +282,8 @@ function App() {
     chat: <ChatView data={data} onApprovePlan={approvePlan} onDeclinePlan={declinePlan} />,
   };
 
-  const pending = data.approvals.length;
+  const completedUndismissed = data.tasks.filter((t) => (t.state === "done" || t.state === "stop") && !dismissed.has(t.id));
+  const pending = data.approvals.length + completedUndismissed.length;
 
   return (
     <React.Fragment>
