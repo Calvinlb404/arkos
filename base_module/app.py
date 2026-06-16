@@ -413,17 +413,25 @@ async def oauth_callback(service: str, request: Request):
     else:
         import aiohttp
 
+        import asyncio as _asyncio
         async with aiohttp.ClientSession() as session:
-            try:
-                await tool_manager._ensure_user_server(session, user_id, service)
-            except AuthRequiredError as e:
-                # User bounced back but the connection isn't live yet. Leave
-                # the setup URL in place so they can retry.
-                status = "pending"
-                error_msg = e.message
-            except Exception as e:
-                status = "error"
-                error_msg = str(e)
+            # Retry a couple of times: Smithery's token may not be ready the
+            # instant the OAuth redirect fires, so a single attempt can come
+            # back auth_required even though the user did complete the flow.
+            for attempt in range(3):
+                try:
+                    await tool_manager._ensure_user_server(session, user_id, service)
+                    break  # connected
+                except AuthRequiredError as e:
+                    if attempt < 2:
+                        await _asyncio.sleep(1.5)
+                        continue
+                    status = "pending"
+                    error_msg = e.message
+                except Exception as e:
+                    status = "error"
+                    error_msg = str(e)
+                    break
 
         if status == "connected":
             await _refresh_system_prompt()

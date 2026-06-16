@@ -264,8 +264,19 @@ function SettingsModal({ data, onClose, onSignOut }) {
     api.connectService(service).then((j) => {
       if (j.status === "connected") { if (popup) popup.close(); refresh(); return; }
       if (j.setup_url) {
-        if (popup && !popup.closed) popup.location.href = j.setup_url;
-        else setAuthLink((m) => ({ ...m, [service]: j.setup_url }));  // blocked: surface a link
+        // Smithery's setupUrl doesn't always embed the returnUrl we sent in the
+        // body. Append it as a query param so the OAuth flow redirects back to
+        // ark's callback page and completes the connection.
+        let setupUrl = j.setup_url;
+        if (j.return_url) {
+          try {
+            const u = new URL(setupUrl);
+            u.searchParams.set("returnUrl", j.return_url);
+            setupUrl = u.toString();
+          } catch { /* keep original if URL parse fails */ }
+        }
+        if (popup && !popup.closed) popup.location.href = setupUrl;
+        else setAuthLink((m) => ({ ...m, [service]: setupUrl }));  // blocked: surface a link
         startPoll(service, popup);
       } else {
         if (popup) popup.close();
