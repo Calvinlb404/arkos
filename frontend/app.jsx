@@ -282,8 +282,7 @@ function App() {
     chat: <ChatView data={data} onApprovePlan={approvePlan} onDeclinePlan={declinePlan} />,
   };
 
-  const completedUndismissed = data.tasks.filter((t) => (t.state === "done" || t.state === "stop") && !dismissed.has(t.id));
-  const pending = data.approvals.length + completedUndismissed.length;
+  const pending = data.approvals.length;
 
   return (
     <React.Fragment>
