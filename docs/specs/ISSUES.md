@@ -6,7 +6,60 @@
 - Frontend map: `frontend/app.jsx`, `frontend/seed.jsx`, `frontend/views.jsx`, `frontend/components.jsx` (the **only** served UI — `arkos-webui` is not used)
 - Companion specs: `HARNESS_SPEC.md`, `MEMORY_SPEC.md`, `ROLLBACK_SPEC.md`
 
-**Status:** Not started | **Author:** | **Last updated:** 2026-06-14
+**Status:** Not started | **Author:** | **Last updated:** 2026-06-15
+
+---
+
+# Consolidated Punch List (added 2026-06-15)
+
+A single ranked view of every confirmed defect behind "tasks finish but don't show
+up" and "things get missed along the way." It merges the two surfacing mechanisms
+this spec already documents with three execution-layer bugs found by reading the
+current tree. Line references verified against the working copy on 2026-06-15.
+
+Whole thing is roughly a week of focused work, not a rewrite. The design (state
+graph, schema, contracts) is intact; every item below is glue at one of three
+seams: the frontend fetch layer, the identity boundary, or the post-unification
+caller updates that didn't land.
+
+| # | Sev | Seam | Defect | Evidence |
+|---|-----|------|--------|----------|
+| 1 | P0 | frontend | List never asks for finished work, so DONE never appears and a completed/failed task drops out on the next poll. Also kills the command log: events are fetched only for tasks still in the live buckets, so a finished computer task's shell history vanishes with it. | `app.jsx:111` (fetches only `running` + `awaiting_approval`), `app.jsx:130` (events only for live `rawTasks`) |
+| 2 | P0 | identity | Reads scope by JWT `sub`; some writes scope by the `X-User-ID` header; `_user_uuid()` derives a third UUID keyspace. If the header ever differs from `sub`, a row is written under one identity and listed under another. "Stores but doesn't surface." | `task_store.py:23`, `app.py:238,299,344,371,505`, `seed.jsx` POST headers |
+| 3 | P1 | execution | Executor subagent can never see tools. `ScopedToolManager.list_all_tools(self)` takes no `user_id`, but the executor calls it with one → `TypeError`, caught, logged as "could not list tools", tool list becomes "(no tools available)". Every MCP step then degrades to ask_human. Breaks the original MCP flow outright. | `tool_module/scoped.py:37` vs `state_module/agent_executor/state_executor.py:83` |
+| 4 | P1 | execution | Executor error path crashes. On any error in a non-terminal state, `agent.py` sets `current_state = flow.get_state("agent_reply")` — a buddy-only state absent from the executor graph → `KeyError` → task marked failed. Combined with #1 the failure is invisible. | `agent_module/agent.py:398,491`; executor graph has only `executor/use_tool/ask_human/executor_done` |
+| 5 | P1 | frontend | Approvals and plans fail silent. Optimistic approval removal isn't rolled back on a failed respond (zombie reappears next session). A malformed `ark-plan` fence is regex-parsed away with no affordance, leaving a plan with no approve button. | `app.jsx:164-173`, `seed.jsx:50-58` (`parsePlan`) |
+| 6 | P2 | backend | Three writers touch `tasks.status`, and status is written separately from its event — a poll can see a status with no event, or a terminal status with stale `context_payload`. | `task_store.py:81-137`, `computer_module/store.py:94-109` |
+| 7 | P2 | ops | Migrations are manual. `db/migrate.py` is not run at startup or in compose. If 0003/0007 aren't applied on the deployed DB, every unified query 500s and #1 hides it. | no startup/compose invocation of `db/migrate.py` |
+
+**Map to the detailed tasks below:** #1 = Task 1, #2 = Task 2, #5 = Task 3, #6 =
+Task 4. **#3, #4, #7 are new** and not yet broken out into Tasks — they are
+execution/ops bugs, not surfacing, but they produce failed or stuck rows that #1
+then renders invisible, which is why the system "feels" broken rather than "shows
+an error."
+
+**Direct answers to the three questions that prompted this:**
+
+- *Why don't finished tasks surface to DONE?* Item #1. `refreshAll` only ever
+  requests `status=running` and `status=awaiting_approval`. There is no fetch for
+  `completed`/`failed` anywhere, so a finished task is simply never asked for and
+  falls out of the list on the next 6s poll.
+- *Is the plan JSON schema-constrained, or scraped?* Both, at different ends, and
+  that split is the brittleness. The backend generates the plan under a real JSON
+  schema (`state_plan.py` passes `WorkshopOutput.model_json_schema()` to the LLM),
+  then re-serializes the validated object into a ` ```ark-plan ` fenced block
+  inside the chat text. The frontend recovers it by **regex + `JSON.parse`**
+  (`seed.jsx:50`), not constrained decode. So generation is structured but the
+  channel back to JS is an unstructured text scrape; any fence drift makes
+  `parsePlan` silently return `plan:null` (item #5).
+- *Are the computer agent's commands surfaced?* At the data layer, yes — every
+  sandbox tool call emits before it runs (`tools.dispatch` → `{kind:"shell",
+  tool:"run_command", args}` at `tools.py:204`), which flows through the runner's
+  `emit` into the shared `task_events` table and is readable at
+  `/tasks/{id}/events`. The gap is purely #1: the UI fetches those events only for
+  tasks still in the live buckets, so you can watch commands stream during a run
+  but the whole log disappears the instant the task finishes, and a fast-failing
+  task never shows them at all.
 
 ---
 
@@ -107,11 +160,20 @@ state graph, and the SSE endpoint that already exists for computer tasks.
 or failed task vanishes on the next poll; DONE never shows and the computer badge
 undercounts.
 
+**Decision (2026-06-15):** the finished-task window is **the last 15 minutes**.
+Long enough to see a task you just ran land in DONE; short enough that the list
+never grows unbounded. The bound is applied server-side in the `/tasks` query for
+terminal statuses (`completed`/`failed`), keyed off the task's terminal timestamp,
+not client-side.
+
 **Done when:**
-- `refreshAll` also fetches `completed` and `failed` (bounded to a recent window,
-  e.g. last N or last 24h) and merges them into the list.
+- `refreshAll` also fetches `completed` and `failed`, bounded to **terminal within
+  the last 15 minutes**, and merges them into the list.
+- The bound is enforced in the backend list query (e.g.
+  `status IN ('completed','failed') AND finished_at >= now() - interval '15 minutes'`),
+  so the client never pulls the full history.
 - The task row renders its terminal state (`done`/`stop`) and persists across
-  polls; the computer-task badge counts terminal states correctly.
+  polls within the window; the computer-task badge counts terminal states correctly.
 
 **Touch point:** `frontend/app.jsx:111-138`, `frontend/seed.jsx` (`api.tasks`),
 `frontend/views.jsx:62-73,170`.
@@ -144,9 +206,12 @@ computer_router.py`, `frontend/seed.jsx` (auth headers), `task_store.py:23`
 
 **Priority:** P0 | **Effort:** ~1 day | **Blockers:** none
 
-**Out of scope:** Collapsing the UUID vs raw-sub keyspaces themselves (Memory
-still uses raw sub — acceptable as long as identity *resolution* is single-source;
-revisit in Open Question 2).
+**Decision (2026-06-15):** we are also collapsing the keyspaces — see **Task 5**.
+Task 2 (single-source *resolution*) still ships first as the fast fix; Task 5 then
+removes the dual keyspace entirely so there is one `user_id` everywhere.
+
+**Out of scope:** the keyspace consolidation itself (now its own Task 5). Task 2 is
+just making every endpoint resolve identity from the verified JWT `sub`.
 
 **Acceptance test:** `test_task_created_in_ui_appears_in_same_ui` (below).
 
@@ -200,6 +265,77 @@ terminal status with stale `context_payload`.
 
 **Acceptance test:** `test_status_and_event_are_atomic`,
 `test_single_status_writer` (below).
+
+---
+
+## Task 5: Consolidate identity onto one UUID keyspace
+
+**Problem:** Two keyspaces exist — tasks/approvals use `_user_uuid(sub)` (a derived
+UUID), while Memory, the sandbox registry, and `conversation_context` use the raw
+`sub`. Task 2 makes *resolution* single-source but leaves two stored shapes, which
+keeps the door open for future drift and makes cross-joins (a task's chat message,
+a user's sandbox) awkward.
+
+**Decision (2026-06-15):** unify on the **UUID**. The derived `_user_uuid(sub)`
+becomes the one identity for every per-user keyspace; raw `sub` is used only at the
+JWT boundary to compute it, never as a storage key.
+
+**Done when:**
+- Memory (`MEMORY_SPEC.md`), the sandbox registry (`user_sandboxes`), and
+  `conversation_context` key off the same UUID that tasks/approvals already use.
+- `_user_uuid()` is the single conversion point, called once at the request edge;
+  no module stores or queries by raw `sub`.
+- A one-time backfill migration maps existing raw-`sub` rows to their UUID (or, for
+  dev data with no lasting value, is documented as dropped — mirror the 0007 note).
+- The diagnostic query shows exactly one `user_id` per user across `tasks`,
+  Memory, and sandbox tables.
+
+**Touch point:** `task_store.py:23` (`_user_uuid` stays the one boundary, now used
+everywhere), `memory_module/*`, `computer_module` sandbox registry, `conversation_
+context` writers in `runner.py`, plus a backfill migration under `db/migrations/`.
+
+**Priority:** P1 | **Effort:** ~2 days | **Blockers:** Task 2 (resolution must be
+single-source before the stored keyspace is collapsed)
+
+**Out of scope:** changing what Memory stores; this only changes the *key*.
+
+**Acceptance test:** `test_one_user_id_across_keyspaces` (below).
+
+---
+
+## Task 6: Replace 6s polling with SSE for all tasks
+
+**Problem:** The list is rebuilt by polling several endpoints on a 6s timer, so any
+gap between "DB is correct" and "the reconstructed view is correct right now" shows
+as flakiness, and the finished-task window (Task 1) is a workaround for the poll
+model rather than a fix.
+
+**Decision (2026-06-15):** **yes**, extend the SSE pattern already used for
+computer tasks (`/computer/tasks/{id}/stream`) to all tasks — but as a
+**fast-follow after Tasks 1–4 land.** Identity (Task 2/5) and the single atomic
+status writer (Task 4) must be clean first; SSE over a racy multi-writer backend
+would just stream the inconsistency faster.
+
+**Done when:**
+- A single stream (e.g. `/tasks/stream` or `/tasks/{id}/stream` generalised from
+  the computer endpoint) pushes status transitions, events, and approval
+  state for the authenticated user.
+- The frontend subscribes once on login and drops the `setInterval(refreshAll,
+  6000)` loop; the 15-minute finished window becomes the initial backfill on
+  connect, after which terminal transitions arrive live.
+- Reconnect/backfill handles a dropped connection without losing or duplicating
+  terminal events (the SSE terminal-event race in Open Question 3 is closed as
+  part of this).
+
+**Touch point:** `computer_module/computer_router.py:146` (existing stream to
+generalise), `base_module/tasks.py` (new stream endpoint), `frontend/app.jsx:98-138`
+(replace polling with a subscription), `frontend/seed.jsx` (EventSource client).
+
+**Priority:** P2 (fast-follow) | **Effort:** ~2–3 days | **Blockers:** Tasks 1–4
+
+**Out of scope:** none beyond the above; this subsumes Open Questions 1 and 3.
+
+**Acceptance test:** `test_terminal_transition_streams_without_poll` (below).
 
 ---
 
@@ -271,20 +407,43 @@ inconsistent rows; one writer makes the terminal row self-consistent.
 
 ---
 
+## Test 7: test_one_user_id_across_keyspaces
+
+**What it verifies:** After Task 5, a single user resolves to exactly one `user_id`
+across `tasks`, Memory, and the sandbox registry — no row is keyed by raw `sub`.
+
+**Why this matters:** Pins the keyspace consolidation so the dual-identity bug
+cannot silently reappear in a new module.
+
+---
+
+## Test 8: test_terminal_transition_streams_without_poll
+
+**What it verifies:** With the SSE subscription (Task 6) and polling removed, a task
+transitioning to `completed`/`failed` pushes a terminal event to the subscribed
+client without a poll, exactly once across a reconnect.
+
+**Why this matters:** Confirms SSE actually closes the poll-window flakiness and
+the terminal-event race, not just relocates them.
+
+---
+
 # Open Questions
 
-1. Replace the 6s task polling with the SSE pattern already used for computer
-   tasks (`/computer/tasks/{id}/stream`), extended to all tasks? Removes the
-   poll-window flakiness entirely but is a larger change. *Leaning: do Tasks 1–4
-   first; SSE as a fast-follow once identity and the writer are clean.*
-2. Should the UUID vs raw-sub keyspaces be unified (make Memory use the UUID too),
-   or is single-source *resolution* (Task 2) enough? Unifying is cleaner but
-   touches the memory layer (see `MEMORY_SPEC.md`).
-3. Backend hardening pass for the SSE terminal-event race (`computer_router.py:
-   146`) and orphan double-execution on restart (`task_runner.py:250`) — real but
-   not everyday flakiness; bundle separately?
-4. Should the finished-task list be time-bounded (last 24h / last N) to avoid
-   unbounded growth once completed tasks are fetched (Task 1)?
+1. ~~Replace the 6s task polling with SSE, extended to all tasks?~~ **RESOLVED
+   (2026-06-15): yes — see Task 6.** Done as a fast-follow after Tasks 1–4 so SSE
+   streams a clean, single-writer, single-identity backend rather than the current
+   race.
+2. ~~Unify the UUID vs raw-sub keyspaces, or is single-source resolution enough?~~
+   **RESOLVED (2026-06-15): unify onto the UUID — see Task 5.** Task 2 ships the
+   resolution fix first; Task 5 then collapses the stored keyspace so there is one
+   `user_id` everywhere (Memory included).
+3. Backend hardening pass for the SSE terminal-event race (`computer_router.py:146`)
+   and orphan double-execution on restart (`task_runner.py:250`). **The SSE race is
+   now folded into Task 6.** Orphan double-execution still stands alone — real but
+   not everyday flakiness; bundle separately.
+4. ~~Should the finished-task list be time-bounded?~~ **RESOLVED (2026-06-15):
+   last 15 minutes, enforced server-side — see Task 1.**
 
 ---
 
