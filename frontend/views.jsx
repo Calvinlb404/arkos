@@ -14,9 +14,10 @@ function PageHead({ title, accent, lede }) {
 /* ---------- DESK ---------- */
 function DeskView({ data, onResolve, dismissed, onDismiss }) {
   const activeTasks = data.tasks.filter((t) => t.state === "run");
-  const recentTasks = data.tasks.filter(
+  const completedTasks = data.tasks.filter(
     (t) => (t.state === "done" || t.state === "stop") && !dismissed.has(t.id)
   );
+  const pendingItems = data.approvals.length + completedTasks.length;
 
   return (
     <div className="view">
@@ -31,9 +32,12 @@ function DeskView({ data, onResolve, dismissed, onDismiss }) {
             <span className="n">{data.approvals.length}</span>
           </header>
           <div className="stack">
-            {data.approvals.length === 0
+            {pendingItems === 0
               ? <Empty glyph="✓">nothing waiting on you</Empty>
-              : data.approvals.map((a) => <ApprovalCard key={a.id} item={a} onResolve={onResolve} />)}
+              : <>
+                  {data.approvals.map((a) => <ApprovalCard key={a.id} item={a} onResolve={onResolve} />)}
+                  {completedTasks.map((t) => <CompletedTaskCard key={t.id} item={t} onDismiss={onDismiss} />)}
+                </>}
           </div>
         </section>
 
@@ -48,18 +52,6 @@ function DeskView({ data, onResolve, dismissed, onDismiss }) {
               : activeTasks.map((t) => <TaskRow key={t.id} item={t} />)}
           </div>
         </section>
-
-        {recentTasks.length > 0 && (
-          <section className="zone">
-            <header>
-              <span className="kicker">recently completed</span>
-              <span className="n">{recentTasks.length}</span>
-            </header>
-            <div className="stack">
-              {recentTasks.map((t) => <CompletedTaskCard key={t.id} item={t} onDismiss={onDismiss} />)}
-            </div>
-          </section>
-        )}
 
         <section className="zone">
           <header>
