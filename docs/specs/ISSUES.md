@@ -339,6 +339,54 @@ generalise), `base_module/tasks.py` (new stream endpoint), `frontend/app.jsx:98-
 
 ---
 
+## Task 7: One JSON-repair chokepoint per language (not per call site)
+
+**Problem:** LLM JSON is parsed in several places and each one fails its own way —
+the frontend `parsePlan` silently drops a malformed `ark-plan` fence, and the five
+executor/buddy states call `model_validate_json` directly, so a single stray token
+from the model breaks a parse with no recovery.
+
+**Why repair is needed even with constrained generation:** schema-constrained
+decoding does **not** guarantee valid JSON at the parse site. The output still
+breaks when the response is truncated at the token cap mid-object, a stop sequence
+fires early, the model wraps the JSON in a ```` ```json ```` fence, or a code path
+calls the model without the grammar actually attached. `json-repair` closes brackets,
+strips fences, removes trailing commas, and quotes stray keys — it is the safety net
+for exactly the case where the constraint did not hold.
+
+**Decision (2026-06-15):** add a JSON-repair pass at the **one function each parse
+stems from**, not at every parse site. Two chokepoints, one repair library each.
+
+**Done when:**
+- **Python:** one helper — `parse_llm_json(content: str, model: type[BaseModel])`
+  in a core util (or on the `ArkModelLink` wrapper) — runs the **`json_repair`**
+  package (`pip install json-repair`; `from json_repair import repair_json`) to
+  fix the raw string, then `model_validate_json` on the repaired output. The five
+  sites switch to calling it and stop calling `model_validate_json` directly:
+  `state_ai.py:121`, `state_plan.py:79`, `state_computer_plan.py:75`,
+  `state_executor.py:124`, `state_tool.py:86`. No repair logic is duplicated in any
+  state.
+- **JS:** one helper — `safeJsonParse(str)` in `seed.jsx` — runs the **`jsonrepair`**
+  package (`npm i jsonrepair`; `import { jsonrepair } from 'jsonrepair'`) before
+  `JSON.parse`. The two parse sites route through it: `parsePlan` (`seed.jsx:55`)
+  and the SSE payload parse (`seed.jsx:285`). `parsePlan` keeps the fail-loud
+  affordance from Task 3 only for the case `jsonrepair` still can't salvage.
+- Both libraries are added to `requirements.txt` / `package.json` respectively.
+
+**Touch point:** one new Python util + one new JS util; the seven call sites above
+become one-line swaps to the helper.
+
+**Priority:** P1 | **Effort:** ~0.5 day | **Blockers:** none (complements Task 3)
+
+**Out of scope:** the trusted `json.loads` over our own DB columns
+(`tasks.py:146,311,405,413`, `store.py:43`, `task_runner.py:93`) — that data is
+JSON we wrote, not model output, so it needs correctness from the writer, not
+repair on read. Do **not** wrap these in the repair helper.
+
+**Acceptance test:** `test_parse_llm_json_repairs_then_validates` (below).
+
+---
+
 # Tests
 
 ## Test 1: test_completed_task_stays_visible
@@ -425,6 +473,17 @@ client without a poll, exactly once across a reconnect.
 
 **Why this matters:** Confirms SSE actually closes the poll-window flakiness and
 the terminal-event race, not just relocates them.
+
+---
+
+## Test 9: test_parse_llm_json_repairs_then_validates
+
+**What it verifies:** `parse_llm_json` repairs a malformed-but-recoverable model
+output (trailing comma, unquoted key, code-fence wrapper) and returns a valid
+model; an unrecoverable input raises one well-defined error, not a silent drop.
+
+**Why this matters:** Pins that repair lives in the one helper and that every state
+inherits it by calling that helper, not by re-implementing parsing.
 
 ---
 
