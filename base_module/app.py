@@ -90,7 +90,13 @@ def _get_or_create_memory(user_id: str) -> Memory:
 
 
 def _make_agent(user_id: str) -> Agent:
-    """Create a fresh Agent for one request. Memory is cached per user; everything else is shared."""
+    """Create a fresh Agent for one request. Memory is cached per user; everything else is shared.
+
+    The system prompt is rebuilt per-user so that per-user OAuth services that
+    are already connected for this caller are included in the tool list rather
+    than listed as "not yet connected." The global _system_prompt is used as a
+    fallback when no tool_manager is available. (UNSAFE_DECISIONS U9 fix.)
+    """
     ag = Agent(
         agent_id=user_id,
         flow=flow,
@@ -100,7 +106,30 @@ def _make_agent(user_id: str) -> Agent:
     )
     now = datetime.now().astimezone()
     date_line = f"Current date and time: {now.strftime('%A, %B %d, %Y %H:%M %Z')}"
-    ag.system_prompt = date_line + "\n\n" + _system_prompt if _system_prompt else date_line
+
+    if tool_manager:
+        # Merge shared tools (loaded at startup) with this user's connected
+        # per-user tools. The deferred list excludes services already connected.
+        user_tools: dict = dict(_available_tools)
+        user_connected = tool_manager._user_tools.get(user_id) or {}
+        for server_name, tools in user_connected.items():
+            # Pack per-user tools into the same {tool_name: spec} shape.
+            packed = {t["name"]: t for t in tools if t.get("name")}
+            user_tools[server_name] = packed
+
+        # Deferred = requires_auth services not yet in user_connected.
+        deferred = [
+            svc for svc in _list_deferred_services()
+            if svc["service"] not in user_connected
+        ]
+
+        base_system_prompt = (config.get("app.system_prompt") or "").strip()
+        tool_prompt = format_tools_for_system_prompt(user_tools, deferred=deferred)
+        prompt = base_system_prompt + "\n\n" + tool_prompt if base_system_prompt else tool_prompt
+    else:
+        prompt = _system_prompt or ""
+
+    ag.system_prompt = date_line + "\n\n" + prompt if prompt else date_line
     ag.available_tools = _available_tools
     return ag
 
