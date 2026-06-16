@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from base_module.jwt_utils import CurrentUser
+from base_module.task_store import _user_uuid
 from computer_module.sandbox import sandbox_manager
 from computer_module.store import (
     create_computer_task,
@@ -47,7 +48,8 @@ async def dispatch_task(body: DispatchRequest, current: dict = CurrentUser):
     from memory_module.memory import Memory
     from config_module.loader import config
 
-    user_id = current["user_id"]
+    # Normalise to UUID so conversation_context and tasks share the same key.
+    user_id = str(_user_uuid(current["user_id"]))
 
     # Mint a fresh session_id so the completion message has somewhere to land.
     # When called from buddy, the session_id comes from the agent's memory.

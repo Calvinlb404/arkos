@@ -27,6 +27,7 @@ from memory_module.memory import Memory
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage
 from state_module.agent_buddy.routers import ROUTERS as BUDDY_ROUTERS
 from state_module.core.state_handler import StateHandler
+from base_module.task_store import _user_uuid
 from tool_module.smithery import AuthRequiredError
 from tool_module.tool_call import MCPToolManager
 
@@ -79,14 +80,18 @@ def _get_or_create_memory(user_id: str) -> Memory:
     # `in` check and the assignment, so two requests cannot both create a
     # Memory for the same user. Do not add an await inside this function, or
     # you reintroduce the double-init race (MULTIUSER Task 3).
-    if user_id not in _memory_cache:
-        _memory_cache[user_id] = Memory(
-            user_id=user_id,
+    #
+    # UUID normalisation (Task 5): conversation_context is keyed by the same
+    # UUID that tasks/approvals use so cross-joins work correctly.
+    uid = str(_user_uuid(user_id))
+    if uid not in _memory_cache:
+        _memory_cache[uid] = Memory(
+            user_id=uid,
             session_id=None,
             db_url=config.get("database.url"),
             use_long_term=config.get("memory.use_long_term", False),
         )
-    return _memory_cache[user_id]
+    return _memory_cache[uid]
 
 
 def _make_agent(user_id: str) -> Agent:
@@ -396,22 +401,27 @@ async def connect_service(service: str, request: Request, current: dict = Curren
 
 @app.post("/services/{service}/disconnect")
 async def disconnect_service(service: str, current: dict = CurrentUser):
-    """Forget a per-user connection client-side. Smithery retains the token
-    until the user revokes it there; we just stop tracking/surfacing it."""
+    """Remove a per-user service connection. Deletes the Smithery token so a
+    subsequent connect() starts a fresh OAuth flow (fixes REVOKED token state)."""
     user_id = current["user_id"]
     if not tool_manager:
         return JSONResponse(content={"error": "tool manager disabled"}, status_code=503)
 
-    by_server = tool_manager._user_tools.get(user_id) or {}
-    by_server.pop(service, None)
-    if user_id in tool_manager._pending:
-        tool_manager._pending[user_id].pop(service, None)
-    # Drop this service's tools from THIS user's registry only (not shared/global).
-    user_reg = tool_manager._user_tool_registry.get(user_id)
-    if user_reg:
-        tool_manager._user_tool_registry[user_id] = {
-            tname: sname for tname, sname in user_reg.items() if sname != service
-        }
+    # Delete from Smithery first (clears the revoked/stale token server-side)
+    # then clear local caches. revoke_user_server is a no-op if not connected.
+    try:
+        await tool_manager.revoke_user_server(user_id, service)
+    except Exception as e:
+        logger.warning("revoke_user_server failed for %s/%s: %s", user_id, service, e)
+        # Fall back to in-memory-only clear so disconnect still works locally.
+        (tool_manager._user_tools.get(user_id) or {}).pop(service, None)
+        (tool_manager._pending.get(user_id) or {}).pop(service, None)
+        user_reg = tool_manager._user_tool_registry.get(user_id)
+        if user_reg:
+            tool_manager._user_tool_registry[user_id] = {
+                t: s for t, s in user_reg.items() if s != service
+            }
+
     await _refresh_system_prompt()
     return JSONResponse(content={"service": service, "status": "disconnected"})
 

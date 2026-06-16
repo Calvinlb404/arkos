@@ -151,6 +151,25 @@ class SmitheryClient:
                 raise SmitheryError(f"upsert_connection {resp.status}: {text}")
             return await resp.json() if text else {}
 
+    async def delete_connection(
+        self,
+        session: aiohttp.ClientSession,
+        connection_id: str,
+    ) -> None:
+        """
+        DELETE /connect/{namespace}/{connection_id}
+
+        Removes the connection from Smithery so a subsequent upsert starts a
+        fresh OAuth flow. Safe to call even if the connection doesn't exist
+        (404 is silently ignored).
+        """
+        url = f"{self.base_url}/connect/{self.namespace}/{connection_id}"
+        logger.debug("smithery DELETE %s", url)
+        async with session.delete(url, headers=self._headers(), timeout=_HTTP_TIMEOUT) as resp:
+            if resp.status not in (200, 204, 404):
+                text = await resp.text()
+                logger.warning("smithery DELETE %s returned %s: %s", url, resp.status, text[:200])
+
     async def jsonrpc(
         self,
         session: aiohttp.ClientSession,
@@ -555,6 +574,27 @@ class SmitheryManager:
             for svc, info in self.get_user_service_status(user_id).items()
             if not info["connected"]
         ]
+
+    async def revoke_user_server(self, user_id: str, server_name: str) -> None:
+        """Delete the Smithery connection for this user+server and clear local state.
+
+        Unlike the in-memory-only disconnect, this tells Smithery to remove the
+        stored token so a subsequent connect() starts a fresh OAuth flow instead
+        of hitting a REVOKED/stale token.
+        """
+        connection_id = self._user_conn_id(user_id, server_name)
+        import aiohttp as _aiohttp
+        async with _aiohttp.ClientSession() as session:
+            await self.client.delete_connection(session, connection_id)
+
+        # Clear local caches
+        (self._user_tools.get(user_id) or {}).pop(server_name, None)
+        (self._pending.get(user_id) or {}).pop(server_name, None)
+        user_reg = self._user_tool_registry.get(user_id)
+        if user_reg:
+            self._user_tool_registry[user_id] = {
+                t: s for t, s in user_reg.items() if s != server_name
+            }
 
     async def shutdown(self) -> None:
         """No persistent sessions to close (each call opens its own ClientSession)."""
