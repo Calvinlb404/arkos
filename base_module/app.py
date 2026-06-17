@@ -75,6 +75,7 @@ def _make_llm() -> ArkModelLink:
             max_tokens=config.get("llm.openai_max_tokens") or 16384,
             temperature=config.get("llm.temperature") or 0.7,
             api_key=api_key,
+            use_max_completion_tokens=True,  # gpt-5.x dropped max_tokens
         )
     # Default: local SGLang/TGI
     return ArkModelLink(
