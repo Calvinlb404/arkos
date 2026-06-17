@@ -565,9 +565,6 @@ class SmitheryManager:
                 "connected": server_name in user_connected,
                 "name": spec.get("name", server_name),
                 "setup_url": user_pending.get(server_name),
-                # False => no OAuth; the frontend skips the popup and connect just
-                # turns the service on (it connects instantly with no setup URL).
-                "oauth": spec.get("oauth", True),
             }
         return status
 

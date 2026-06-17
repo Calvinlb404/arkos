@@ -130,8 +130,6 @@ class StatePlan(State):
                 structured_data={"route": "ask"},
             )
 
-        plan_text = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(plan.plan_steps))
-
         payload = {
             "kind": "plan_proposal",
             "title": plan.title,
@@ -140,11 +138,11 @@ class StatePlan(State):
         }
         sentinel = "```ark-plan\n" + _json.dumps(payload) + "\n```"
 
+        # One-line intro + the sentinel only. The title and steps live in the
+        # ark-plan payload and are drawn by the frontend plan card; emitting them
+        # as prose here too would render the plan twice in the chat.
         body = [
             "Here's the plan I put together. Approve it below to run it.",
-            "",
-            f"**{plan.title}**",
-            plan_text,
             "",
             sentinel,
         ]

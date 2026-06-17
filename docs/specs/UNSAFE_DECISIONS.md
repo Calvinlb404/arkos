@@ -148,41 +148,6 @@ Legend -- **Blast radius:** who is harmed if it's exploited. **Fix-by:** the con
 
 ---
 
-## U11 -- `requires_auth: true` overloaded to give a no-auth service a per-user toggle
-
-**Decision:** Parallel Web Search needs no OAuth (Smithery `configSchema: {}`), but we
-want a per-user on/off switch for it in settings. Rather than build a separate
-"enable/disable shared tool" mechanism, we set `requires_auth: true` on it in
-`config.yaml` and added an `oauth: false` flag. `requires_auth: true` makes it a
-per-user Smithery connection (so "connect" mints a per-user connection that comes
-back `connected` instantly, no setup URL); `oauth: false` is surfaced in `/services`
-(`get_user_service_status`) so the frontend `connect()` skips the OAuth popup and
-just turns it on.
-
-**Why unsafe / sloppy:** `requires_auth` now means two different things -- "needs
-OAuth" for Linear/Gmail/etc. and "is a per-user toggle" for Parallel. The real
-discriminator is the separate `oauth` flag. A reader who keys off `requires_auth`
-alone (e.g. the deferred-services system-prompt copy, which will tell the user
-Parallel "needs to be connected via OAuth") will say the wrong thing. It also means
-a no-auth tool is gated behind a per-user connection that didn't strictly need one.
-
-**Why accepted:** It reuses the entire existing per-user connection path (create,
-gate in `call_tool`, disconnect/revoke) for free, instead of adding a parallel
-"enabled shared services" store + tool-filtering. One config line plus a small
-`oauth` flag versus a new persistence layer.
-
-**Blast radius:** None security-wise -- the connection is real and per-user scoped.
-Cost is conceptual: an overloaded flag and slightly wrong prompt wording for
-no-OAuth toggles.
-
-**Fix-by:** If more no-auth toggles appear, replace the overload with a first-class
-field (e.g. `kind: oauth | toggle | shared`) and branch on that everywhere
-(`/services`, the deferred-services prompt copy, the frontend). Until then, the
-`oauth` flag is the source of truth -- never branch on `requires_auth` alone to
-decide whether a service uses OAuth.
-
----
-
 # How to use this doc
 
 - **Before any deployment that is multi-user or internet-facing**, walk this list. The hard blockers are **U2** (turn `ARK_DEMO_MODE` off) and **U1** (sign the OAuth callback). U5/U7/U8 are required before *public* prod.
