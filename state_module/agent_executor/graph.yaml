@@ -7,10 +7,10 @@ initial: executor
 
 states:
   executor:
-    description: "decides the next plan step: tool call, human question, or done"
+    description: "decides the next plan step: tool call, human question, advance to next step, or done"
     type: executor
     transition:
-      next: [use_tool, ask_human, executor_done]
+      next: [use_tool, ask_human, executor, executor_done]
 
   use_tool:
     description: "executes the tool chosen for the current plan step"

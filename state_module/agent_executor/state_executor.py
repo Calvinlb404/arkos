@@ -171,14 +171,17 @@ class StateExecutor(State):
             )
 
         if decision.action == _ActionKind.advance:
-            # Step confirmed complete by tool results — advance to the next step.
+            # Step confirmed complete by tool results.
             agent.step_idx = step_idx + 1
             if task_id:
                 log_event(task_id, "step_complete", current_step, payload={"step_idx": step_idx})
+            # "continue" loops back to executor for the next step;
+            # "done" goes to executor_done when all steps are exhausted.
+            next_route = "done" if agent.step_idx >= len(plan_steps) else "continue"
             return StateOutput(
                 content="",
                 completion_signal="complete",
-                structured_data={"route": "continue"},
+                structured_data={"route": next_route},
             )
 
         if decision.action == _ActionKind.tool:
