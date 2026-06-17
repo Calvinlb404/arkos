@@ -97,10 +97,23 @@ class StateExecutor(State):
                         props = schema.get("properties") or {}
                         required = set(schema.get("required") or [])
                         if props:
-                            req_params = [f"{k}*" for k in props if k in required]
-                            opt_params = [k for k in props if k not in required]
-                            params_str = ", ".join(req_params + opt_params)
-                            tool_lines.append(f"- {tname}({params_str}): {desc_short}")
+                            # Required params: name* + one-line description so the
+                            # model sees the exact format expected, not a guess.
+                            req_lines = []
+                            for k in props:
+                                if k not in required:
+                                    continue
+                                pdesc = (props[k].get("description") or "").strip()
+                                pdesc_short = pdesc.splitlines()[0][:100] if pdesc else ""
+                                req_lines.append(f"{k}* — {pdesc_short}" if pdesc_short else f"{k}*")
+                            # Optional params: names only (keep prompt compact)
+                            opt_names = [k for k in props if k not in required]
+                            req_str = ", ".join(req_lines)
+                            opt_str = ", ".join(opt_names)
+                            params_str = req_str + (f" | optional: {opt_str}" if opt_str else "")
+                            tool_lines.append(f"- {tname}: {desc_short}")
+                            if params_str:
+                                tool_lines.append(f"    params: {params_str}")
                         else:
                             tool_lines.append(f"- {tname}: {desc_short}")
             except Exception as e:
