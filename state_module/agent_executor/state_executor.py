@@ -10,9 +10,9 @@ to ask_human instead of silently deviating.
 
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum, StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from base_module.task_store import log_event
 from model_module.ArkModelNew import SystemMessage
@@ -179,11 +179,29 @@ class StateExecutor(State):
             )
         )
 
+        # Build a constrained decision schema with tool_name as an enum of the
+        # actual available tools. This prevents the model from hallucinating a
+        # tool name — it can only pick from the real tool list. Without this,
+        # the model guesses names like 'fetch_articles' or 'web_search' from
+        # training data, which triggers fallback_ask.
+        if tool_names:
+            ToolEnum = Enum("ToolEnum", {t: t for t in tool_names})
+            ConstrainedDecision = create_model(
+                "ExecutorDecision",
+                action=(_ActionKind, Field(...)),
+                reason=(str, Field(...)),
+                tool_name=(ToolEnum | None, Field(None)),
+                ask_kind=(_AskKind | None, Field(None)),
+                ask_prompt=(str | None, Field(None)),
+            )
+        else:
+            ConstrainedDecision = ExecutorDecision
+
         schema = {
             "type": "json_schema",
             "json_schema": {
                 "name": "executor_decision",
-                "schema": ExecutorDecision.model_json_schema(),
+                "schema": ConstrainedDecision.model_json_schema(),
             },
         }
 
@@ -191,7 +209,15 @@ class StateExecutor(State):
         output = await agent.call_llm(context=[system] + list(context), json_schema=schema)
         # parse_llm_json raises OutputValidationError on failure; _run_state
         # catches it and produces an error StateOutput rather than crashing.
-        decision = parse_llm_json(output.content if output else None, ExecutorDecision)
+        raw_decision = parse_llm_json(output.content if output else None, ConstrainedDecision)
+        # Normalise to base ExecutorDecision so the rest of the code is type-stable.
+        decision = ExecutorDecision(
+            action=_ActionKind(raw_decision.action.value if hasattr(raw_decision.action, 'value') else raw_decision.action),
+            reason=raw_decision.reason,
+            tool_name=raw_decision.tool_name.value if raw_decision.tool_name and hasattr(raw_decision.tool_name, 'value') else raw_decision.tool_name,
+            ask_kind=raw_decision.ask_kind,
+            ask_prompt=raw_decision.ask_prompt,
+        )
 
         if task_id:
             log_event(
