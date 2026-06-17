@@ -93,6 +93,17 @@ services:
       - arkos-network
 
   # ============================================
+  # Browserless - Sandboxed Chromium pool (CDP over WebSocket)
+  # ============================================
+  browserless:
+    image: ghcr.io/browserless/chromium:latest
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    networks:
+      - arkos-network
+
+  # ============================================
   # Supabase Services
   # ============================================
   supabase-db:

@@ -5,7 +5,7 @@ Every approved plan becomes one `run_task(task_id)` coroutine spawned via
 asyncio.create_task. It builds a subagent with:
   - its own Memory row (new session_id, same user_id as the chat agent, so
     long-term mem0 is shared)
-  - the executor state graph (state_module/graphs/executor.yaml)
+  - the executor state graph (state_module/agent_executor/graph.yaml)
   - a ScopedToolManager limited to the plan's required_tools
 and then walks plan_steps one at a time until the executor graph terminates.
 
@@ -34,14 +34,15 @@ from base_module.task_store import (  # noqa: E402
 from config_module.loader import config  # noqa: E402
 from memory_module.memory import Memory  # noqa: E402
 from model_module.ArkModelNew import SystemMessage, UserMessage  # noqa: E402
-from state_module.state_handler import StateHandler  # noqa: E402
+from state_module.agent_executor.routers import ROUTERS as EXECUTOR_ROUTERS  # noqa: E402
+from state_module.core.state_handler import StateHandler  # noqa: E402
 from tool_module.scoped import ScopedToolManager  # noqa: E402
 
 # Keep strong refs to in-flight tasks so GC doesn't cancel them.
 _RUNNING: dict[str, asyncio.Task] = {}
 
 EXECUTOR_GRAPH_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "state_module", "graphs", "executor.yaml")
+    os.path.join(os.path.dirname(__file__), "..", "state_module", "agent_executor", "graph.yaml")
 )
 
 EXECUTOR_SYSTEM_PROMPT = """\
@@ -131,7 +132,11 @@ async def _run_task_inner(task_id: str) -> None:
     llm, shared_tm = _shared_deps()
     tool_manager = ScopedToolManager(shared_tm, allowed=required_tools) if shared_tm else None
 
-    flow = StateHandler(yaml_path=EXECUTOR_GRAPH_PATH)
+    flow = StateHandler(
+        yaml_path=EXECUTOR_GRAPH_PATH,
+        agent_pkg="state_module.agent_executor",
+        routers=EXECUTOR_ROUTERS,
+    )
     subagent = Agent(
         agent_id=f"task-{task_id}",
         flow=flow,
