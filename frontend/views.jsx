@@ -20,7 +20,7 @@ function DeskView({ data, onResolve, dismissed, onDismiss }) {
   const pendingItems = data.approvals.length + completedTasks.length;
 
   return (
-    <div className="view">
+    <div className="view view-wide">
       <PageHead
         title="buddy's desk"
         lede="your digital life, handled in the background. buddy watches, triages, and workshops plans for your approval."

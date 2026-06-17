@@ -215,19 +215,22 @@ class Memory:
                 conn = self._pool.getconn()
                 try:
                     cur = conn.cursor()
+                    # Scope to (user_id, session_id). Without the session filter,
+                    # this returned the user's last N turns across ALL their
+                    # conversations, so unrelated chats bled into each other (Fix 5).
                     cur.execute(
                         """
                         SELECT role, message
                         FROM (
                             SELECT id, role, message
                             FROM conversation_context
-                            WHERE user_id = %s
+                            WHERE user_id = %s AND session_id = %s
                             ORDER BY id DESC
                             LIMIT %s
                         ) sub
                         ORDER BY id ASC
                         """,
-                        (self.user_id, turns),
+                        (self.user_id, self.session_id, turns),
                     )
                     rows = cur.fetchall()
                     cur.close()

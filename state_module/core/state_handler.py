@@ -103,7 +103,12 @@ class StateHandler:
                     f"Discovered types: {sorted(self._state_types)}"
                 )
             state_class = self._state_types[state_type]
-            self.states[name] = state_class(name, config)
+            state = state_class(name, config)
+            # Freeze: states are shared across all concurrent requests/users, so
+            # they must be immutable at runtime. Per-request data lives on the
+            # Agent. Any self.x = ... in run() now raises instead of bleeding (Fix 4).
+            state._freeze()
+            self.states[name] = state
 
         self.initial_state_name: str = self.graph["initial"]
 

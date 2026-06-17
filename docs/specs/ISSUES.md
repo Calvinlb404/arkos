@@ -63,6 +63,75 @@ an error."
 
 ---
 
+# Concurrency & Memory Fixes (DONE 2026-06-15)
+
+Separate from the surfacing work above. These came out of a "the prompt is global
+shared-only, I thought it was per-user" audit of the chat hot path. Three globals
+that should be per-user, two of them real races, one a confirmed memory bleed. All
+three are now fixed in the tree.
+
+## CM1 -- Per-request global system-prompt rebuild (cross-user race) — FIXED
+
+**Was:** `_refresh_system_prompt()` rewrote the module globals `_system_prompt` /
+`_available_tools` on every chat request (`app.py:580`) and on every
+connect/disconnect/oauth. It did `_available_tools = await
+tool_manager.list_all_tools()` with an `await` in the middle, so two concurrent
+users rewrote the same globals while a third read them — the exact shape of the
+original U9 "last request's user leaks into everyone's prompt." Benign only because
+`list_all_tools()` with no `user_id` returns the static shared set.
+
+**Fix:** Deleted `_refresh_system_prompt` and all four call sites. The prompt is
+already built per-user in `_make_agent` from live `tool_manager` state (shared tools
+loaded once at startup + this caller's connected per-user tools). `_available_tools`
+is now written once at startup and treated as read-only shared state. Removes the
+race and an extra `list_all_tools()` round-trip per message.
+
+**Touch point:** `base_module/app.py` (`_refresh_system_prompt` removed; calls at the
+old 398/425/476/580 removed).
+
+## CM2 -- Shared State instances could bleed across users (latent) — FIXED
+
+**Was:** One `StateHandler` (`flow`) is shared across every concurrent request, so
+every agent's `current_state` points at the *same* `State` object. Safe only because
+states are stateless today (all `self.x =` writes are in `__init__`; per-request data
+lives on the Agent). Nothing enforced that invariant — one `self.x = ...` added to a
+`run()` would silently bleed one user's data into every concurrent user.
+
+**Fix:** `State` now freezes after construction (`_freeze()` + a `__setattr__` guard),
+and `StateHandler` calls `_freeze()` on each state it builds. Any attribute write at
+runtime now raises immediately instead of bleeding. Verified: construction still works,
+post-freeze writes raise.
+
+**Touch point:** `state_module/core/state.py`, `state_module/core/state_handler.py`.
+
+## CM3 -- Short-term memory bleed across conversations (confirmed) — FIXED
+
+**Was:** `retrieve_short_memory` filtered `WHERE user_id = %s` only, never
+`session_id`, even though `add_memory` writes a `session_id`. So it returned the
+user's last N turns across *every* conversation, and unrelated chats bled into each
+other. Compounded by one sticky `Memory` object cached per user (one session id for
+the whole server lifetime).
+
+**Fix:** Three parts.
+- `retrieve_short_memory` now scopes to `(user_id, session_id)` (`memory_module/
+  memory.py`).
+- The chat endpoint reads an `X-Session-ID` header and threads it into a
+  per-`(user, session)` Memory via `_get_or_create_memory(user_id, session_id)` /
+  `_make_agent(user_id, session_id)` (`base_module/app.py`).
+- The frontend generates a per-conversation session id, sends it on every chat
+  request, and resets it on sign-out (`frontend/seed.jsx`).
+
+The executor already built `Memory(session_id=...)` per task, so both paths now agree.
+
+**Note / follow-up:** with short-term scoped per session, a fresh browser session
+starts with empty DB recall and relies on the request's own full history (which the
+frontend already sends). Durable cross-session recall is the long-term (mem0) path,
+which is **off by default** in `config.yaml` (`memory.use_long_term: false`). If
+cross-session "remembers last week" is wanted, that's a separate long-term-memory
+task, not a regression of this fix.
+
+---
+
 # Problem
 
 The database stores task/approval/event state correctly, but the UI surfaces it

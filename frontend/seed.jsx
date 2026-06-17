@@ -15,12 +15,19 @@ function resolveBackend() {
   return "http://localhost:1113";
 }
 
+function newSessionId() {
+  return (crypto.randomUUID && crypto.randomUUID()) || ("s-" + Date.now() + "-" + Math.random().toString(16).slice(2));
+}
+
 const CONFIG = {
   backend: resolveBackend(),
   token: localStorage.getItem("ark_token") || "",
   userId: localStorage.getItem("ark_user_id") || "",
   username: localStorage.getItem("ark_username") || "",
   model: "ark-agent",
+  // Per-conversation id so short-term memory is scoped to this chat (Fix 5).
+  // Reset on clear / sign-out via api.newSession().
+  sessionId: newSessionId(),
 };
 
 function authHeaders(extra) {
@@ -166,6 +173,13 @@ const api = {
     localStorage.removeItem("ark_token");
     localStorage.removeItem("ark_user_id");
     localStorage.removeItem("ark_username");
+    CONFIG.sessionId = newSessionId();   // new conversation scope on sign-out
+  },
+
+  // Start a fresh conversation scope (clears short-term memory continuity).
+  newSession() {
+    CONFIG.sessionId = newSessionId();
+    return CONFIG.sessionId;
   },
 
   // returns { tasks: [...] } for a status filter, or { unauthorized: true }
@@ -290,7 +304,7 @@ const api = {
   async chatStream(messages, onDelta, onStatus) {
     const res = await fetch(CONFIG.backend + "/v1/chat/completions", {
       method: "POST",
-      headers: authHeaders({ "Content-Type": "application/json" }),
+      headers: authHeaders({ "Content-Type": "application/json", "X-Session-ID": CONFIG.sessionId }),
       body: JSON.stringify({ model: CONFIG.model, stream: true, messages }),
     });
     if (!res.ok || !res.body) throw new Error("stream failed: " + res.status);

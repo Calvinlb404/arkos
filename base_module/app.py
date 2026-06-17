@@ -75,27 +75,33 @@ _system_prompt: str = ""
 _available_tools: dict = {}
 
 
-def _get_or_create_memory(user_id: str) -> Memory:
+def _get_or_create_memory(user_id: str, session_id: str) -> Memory:
     # Race-free under single-threaded asyncio: there is NO await between the
     # `in` check and the assignment, so two requests cannot both create a
-    # Memory for the same user. Do not add an await inside this function, or
+    # Memory for the same key. Do not add an await inside this function, or
     # you reintroduce the double-init race (MULTIUSER Task 3).
     #
     # UUID normalisation (Task 5): conversation_context is keyed by the same
     # UUID that tasks/approvals use so cross-joins work correctly.
+    #
+    # Cache key includes session_id so each conversation gets its own Memory with
+    # a STABLE session_id. Previously one Memory per user was shared across every
+    # conversation with a single sticky session, and short-term retrieval ignored
+    # the session, so unrelated chats bled into each other (Fix 5).
     uid = str(_user_uuid(user_id))
-    if uid not in _memory_cache:
-        _memory_cache[uid] = Memory(
+    key = f"{uid}:{session_id}"
+    if key not in _memory_cache:
+        _memory_cache[key] = Memory(
             user_id=uid,
-            session_id=None,
+            session_id=session_id,
             db_url=config.get("database.url"),
             use_long_term=config.get("memory.use_long_term", False),
         )
-    return _memory_cache[uid]
+    return _memory_cache[key]
 
 
-def _make_agent(user_id: str) -> Agent:
-    """Create a fresh Agent for one request. Memory is cached per user; everything else is shared.
+def _make_agent(user_id: str, session_id: str) -> Agent:
+    """Create a fresh Agent for one request. Memory is cached per (user, session); everything else is shared.
 
     The system prompt is rebuilt per-user so that per-user OAuth services that
     are already connected for this caller are included in the tool list rather
@@ -105,7 +111,7 @@ def _make_agent(user_id: str) -> Agent:
     ag = Agent(
         agent_id=user_id,
         flow=flow,
-        memory=_get_or_create_memory(user_id),
+        memory=_get_or_create_memory(user_id, session_id),
         llm=llm,
         tool_manager=tool_manager,
     )
@@ -318,17 +324,13 @@ async def list_services(current: dict = CurrentUser):
     return JSONResponse(content={"user_id": user_id, "shared": shared, "per_user": per_user})
 
 
-async def _refresh_system_prompt() -> None:
-    """Rebuild _system_prompt from the current tool_manager state.
-    Called after a connection change so buddy picks up the new tools."""
-    global _system_prompt, _available_tools
-    if not tool_manager:
-        return
-    _available_tools = await tool_manager.list_all_tools()
-    deferred = _list_deferred_services()
-    tool_prompt = format_tools_for_system_prompt(_available_tools, deferred=deferred)
-    base = (config.get("app.system_prompt") or "").strip()
-    _system_prompt = base + "\n\n" + tool_prompt if base else tool_prompt
+# NOTE: there is intentionally no per-request system-prompt rebuild. The prompt is
+# assembled per-user in _make_agent() from the live tool_manager state (shared
+# tools loaded once at startup + this caller's connected per-user tools). The old
+# _refresh_system_prompt() mutated the module globals _system_prompt/_available_tools
+# on every chat/connect call, which was a cross-user race (one request's snapshot
+# could be read by another) and redundant work. _available_tools is now written once
+# at startup and treated as read-only shared state.
 
 
 def _callback_return_url(request: Request, service: str, user_id: str) -> str:
@@ -395,7 +397,7 @@ async def connect_service(service: str, request: Request, current: dict = Curren
                 status_code=500,
             )
 
-    await _refresh_system_prompt()
+    # No global refresh: the next chat builds this user's prompt live in _make_agent.
     return JSONResponse(content={"service": service, "status": "connected"})
 
 
@@ -422,7 +424,7 @@ async def disconnect_service(service: str, current: dict = CurrentUser):
                 t: s for t, s in user_reg.items() if s != service
             }
 
-    await _refresh_system_prompt()
+    # No global refresh: the next chat builds this user's prompt live in _make_agent.
     return JSONResponse(content={"service": service, "status": "disconnected"})
 
 
@@ -471,9 +473,6 @@ async def oauth_callback(service: str, request: Request):
                     status = "error"
                     error_msg = str(e)
                     break
-
-        if status == "connected":
-            await _refresh_system_prompt()
 
     import json as _json
 
@@ -559,9 +558,14 @@ async def chat_completions(request: Request, current: dict = CurrentUser):
     # Identity comes from the verified token (CurrentUser), never the body/header.
     user_id = current["user_id"]
 
+    # Conversation isolation: the client sends a per-conversation session id so
+    # short-term memory is scoped to this chat, not bled across the user's other
+    # conversations. Absent header -> a fresh session (stateless single turn).
+    session_id = request.headers.get("X-Session-ID") or str(uuid.uuid4())
+
     # Lazily connect any per-user OAuth servers (e.g. Linear) that the user
     # has already authorized.  This populates tool_manager._user_tools so
-    # the system prompt includes their tools instead of a "please connect" stub.
+    # _make_agent's per-user prompt includes their tools instead of a "connect" stub.
     if tool_manager and user_id:
         import contextlib
 
@@ -577,9 +581,8 @@ async def chat_completions(request: Request, current: dict = CurrentUser):
                 # auth_required is expected if user hasn't connected yet
                 with contextlib.suppress(Exception):
                     await tool_manager._ensure_user_server(_sess, user_id, svc_name)
-        await _refresh_system_prompt()
 
-    req_agent = _make_agent(user_id)
+    req_agent = _make_agent(user_id, session_id)
 
     context_msgs = []
     context_msgs.append(SystemMessage(content=req_agent.system_prompt))

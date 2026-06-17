@@ -225,7 +225,7 @@ main {
   overflow-y: auto;
   background: var(--paper);
 }
-.view { padding: 46px 56px 64px; max-width: 1320px; }
+.view { padding: 46px 56px 64px; max-width: 1320px; margin: 0 auto; }
 .view-wide { max-width: none; }
 
 /* page head */
