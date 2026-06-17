@@ -22,6 +22,31 @@ from state_module.core.state import State
 from state_module.core.state_registry import register_state
 
 
+_TOOL_ERROR_SIGNALS = (
+    '"ok": false', '"ok":false',
+    "mcp error", '"error":', "channel_not_found", "not_found",
+    "invalid_type", "unrecognized_keys", "validation error",
+    "input validation error",
+)
+
+
+def _last_tool_was_error(context: list) -> bool:
+    """Return True if the most recent tool result in context indicates failure.
+
+    Scans backwards for the first AIMessage that looks like a tool result
+    (content starts with 'tool ') and checks for error signals in its body.
+    This is the programmatic gate on the advance action — the model's prompt
+    instruction alone is not reliable enough on a 7B model that has seen
+    a human approval and treats it as confirmation.
+    """
+    for msg in reversed(context):
+        content = (getattr(msg, "content", "") or "").strip()
+        if content.startswith("tool ") and " -> " in content:
+            result = content.split(" -> ", 1)[-1].lower()
+            return any(sig in result for sig in _TOOL_ERROR_SIGNALS)
+    return False
+
+
 class _ActionKind(StrEnum):
     tool = "tool"
     ask = "ask"
@@ -140,7 +165,13 @@ class StateExecutor(State):
                 "may require listing calendars first to get the ID, then calling create_event. "
                 "In that case: first call list_calendars, then on the next decision call create_event, "
                 "then advance once the event is confirmed created.\n\n"
-                "NEVER advance a step unless a tool_result in the conversation confirms it succeeded.\n"
+                "NEVER choose advance if the most recent tool_result shows an error (e.g. ok=false, "
+                "MCP error, channel_not_found, not_found, validation error). On an error: choose tool "
+                "to retry with corrected arguments, or ask if you cannot fix it.\n"
+                "A human saying 'yes' or 'approved' does NOT mean the step succeeded — only a "
+                "successful tool_result (ok=true or data returned with no error field) confirms success.\n"
+                "If a tool returns 'not_found' for a channel, user, or resource ID: use a "
+                "list/find/search tool first to discover the correct identifier, then retry.\n"
                 "Never invent tool names or parameter names. Use ONLY the tools and params listed below.\n"
                 "Parameters marked with * are required. Use exact parameter names as shown.\n\n"
                 f"Available tools:\n{tools_block}\n\n"
@@ -171,12 +202,32 @@ class StateExecutor(State):
             )
 
         if decision.action == _ActionKind.advance:
-            # Step confirmed complete by tool results.
+            # Programmatic guard: the model's prompt instruction ("never advance
+            # on an error") is not reliable on a 7B model that sees a human
+            # approval and treats it as step confirmation. Block advance if the
+            # most recent tool result in context signals failure, and force a
+            # retry instead.
+            if _last_tool_was_error(context):
+                if task_id:
+                    log_event(task_id, "advance_blocked",
+                              "blocked advance: last tool result was an error",
+                              payload={"step_idx": step_idx})
+                agent.pending_ask = {
+                    "kind": "text",
+                    "prompt": (
+                        f"The last tool call failed for step {step_idx + 1}: {current_step}\n"
+                        "The error is shown above. How should I fix this and retry?"
+                    ),
+                }
+                return StateOutput(
+                    content="",
+                    completion_signal="incomplete",
+                    structured_data={"route": "ask"},
+                )
+
             agent.step_idx = step_idx + 1
             if task_id:
                 log_event(task_id, "step_complete", current_step, payload={"step_idx": step_idx})
-            # "continue" loops back to executor for the next step;
-            # "done" goes to executor_done when all steps are exhausted.
             next_route = "done" if agent.step_idx >= len(plan_steps) else "continue"
             return StateOutput(
                 content="",
