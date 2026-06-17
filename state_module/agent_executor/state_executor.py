@@ -25,6 +25,7 @@ from state_module.core.state_registry import register_state
 class _ActionKind(StrEnum):
     tool = "tool"
     ask = "ask"
+    advance = "advance"   # step is complete; move to the next one
 
 
 class _AskKind(StrEnum):
@@ -100,13 +101,17 @@ class StateExecutor(State):
         system = SystemMessage(
             content=(
                 "You are a subagent executing a plan one step at a time.\n"
-                "You are NOT allowed to re-plan or skip steps.\n"
-                "For the CURRENT step, decide if it can be performed by calling a tool, "
-                "or if you need to ask the human a question.\n"
-                "Prefer ask=binary when the question is a simple yes/no (confirmation).\n"
-                "Prefer ask=text when the question is open-ended or needs data from the user.\n"
-                "If a step can only be partially handled by tools, ask the human.\n"
-                "Never invent tool names. Pick from the list below or set action=ask.\n\n"
+                "You are NOT allowed to re-plan or skip steps.\n\n"
+                "Check the conversation above for tool results already obtained for this step.\n"
+                "  - If the current step is fully complete based on those results → action=advance\n"
+                "  - If more tool calls are still needed to complete this step → action=tool\n"
+                "  - If you cannot complete the step with available tools → action=ask\n\n"
+                "A step often needs MULTIPLE tool calls. For example, creating a calendar event "
+                "may require listing calendars first to get the ID, then calling create_event. "
+                "In that case: first call list_calendars, then on the next decision call create_event, "
+                "then advance once the event is confirmed created.\n\n"
+                "NEVER advance a step unless a tool_result in the conversation confirms it succeeded.\n"
+                "Never invent tool names. Pick from the list below.\n\n"
                 f"Available tools:\n{tools_block}\n\n"
                 f"Current plan step ({step_idx + 1}/{len(plan_steps)}): {current_step}\n"
             )
@@ -120,7 +125,8 @@ class StateExecutor(State):
             },
         }
 
-        output = await agent.call_llm(context=[system], json_schema=schema)
+        # Pass full context so the executor can see prior tool results for this step.
+        output = await agent.call_llm(context=[system] + list(context), json_schema=schema)
         # parse_llm_json raises OutputValidationError on failure; _run_state
         # catches it and produces an error StateOutput rather than crashing.
         decision = parse_llm_json(output.content if output else None, ExecutorDecision)
@@ -131,6 +137,17 @@ class StateExecutor(State):
                 "step_started",
                 current_step,
                 payload={"step_idx": step_idx, "decision": decision.model_dump(mode="json")},
+            )
+
+        if decision.action == _ActionKind.advance:
+            # Step confirmed complete by tool results — advance to the next step.
+            agent.step_idx = step_idx + 1
+            if task_id:
+                log_event(task_id, "step_complete", current_step, payload={"step_idx": step_idx})
+            return StateOutput(
+                content="",
+                completion_signal="complete",
+                structured_data={"route": "continue"},
             )
 
         if decision.action == _ActionKind.tool:
