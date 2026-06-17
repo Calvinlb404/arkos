@@ -61,7 +61,31 @@ flow = StateHandler(
     agent_pkg="state_module.agent_buddy",
     routers=BUDDY_ROUTERS,
 )
-llm = ArkModelLink(base_url=config.get("llm.base_url"), max_tokens=config.get("llm.max_tokens"))
+def _make_llm() -> ArkModelLink:
+    """Build the LLM client from config. provider=local uses SGLang; provider=openai uses OpenAI API."""
+    provider = (config.get("llm.provider") or "local").strip().lower()
+    if provider == "openai":
+        import os as _os
+        api_key = _os.environ.get("OPENAI_API_KEY", "")
+        if not api_key:
+            raise ValueError("llm.provider=openai but OPENAI_API_KEY is not set in the environment")
+        return ArkModelLink(
+            model_name=config.get("llm.openai_model") or "gpt-4o",
+            base_url=config.get("llm.openai_base_url") or "https://api.openai.com/v1",
+            max_tokens=config.get("llm.openai_max_tokens") or 16384,
+            temperature=config.get("llm.temperature") or 0.7,
+            api_key=api_key,
+        )
+    # Default: local SGLang/TGI
+    return ArkModelLink(
+        base_url=config.get("llm.base_url") or "http://localhost:30000/v1",
+        model_name=config.get("llm.model_name") or "tgi",
+        max_tokens=config.get("llm.max_tokens") or 8192,
+        temperature=config.get("llm.temperature") or 0.7,
+        api_key="-",
+    )
+
+llm = _make_llm()
 
 # Per-user memory cache — keyed by user_id string.
 # Memory.__init__ initialises mem0 (expensive), so we create once per user and reuse.

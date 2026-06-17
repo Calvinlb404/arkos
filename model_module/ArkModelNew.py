@@ -63,16 +63,18 @@ class AIMessage(Message):
 
 class ArkModelLink(BaseModel):
     """
-    A custom chat model designed to interface with Hugging Face TGI
-    servers that expose an OpenAI-compatible API, supporting tool calling.
+    Chat model backed by either a local SGLang/TGI endpoint or the OpenAI API.
 
-    This version uses the AsyncOpenAI client for non-blocking I/O.
+    Both speak the OpenAI-compatible REST protocol so the same client works for
+    both. Set api_key="-" for local endpoints (no real auth needed); set it to
+    the real OPENAI_API_KEY value for the OpenAI backend.
     """
 
     model_name: str = Field(default="tgi")
     base_url: str = Field(default="http://0.0.0.0:30000/v1")
     max_tokens: int = Field(default=1024)
     temperature: float = Field(default=0.7)
+    api_key: str = Field(default="-")  # "-" = local placeholder; real key for OpenAI
 
     # Use a property or method to initialize the client asynchronously if needed,
     # or just create it in the async method, as AsyncOpenAI handles the session.
@@ -84,7 +86,7 @@ class ArkModelLink(BaseModel):
         """Returns the configured AsyncOpenAI client."""
         return AsyncOpenAI(
             base_url=self.base_url,
-            api_key="-",  # Placeholder/Dummy API key
+            api_key=self.api_key,
         )
 
     async def make_llm_call(self, messages: list[Message], json_schema: Optional, stream=False) -> dict[str, Any] | str:

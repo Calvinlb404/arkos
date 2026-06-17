@@ -14,6 +14,10 @@ app:
     Always stay in character as ARK when responding.
 
 llm:
+  # provider: "local" uses SGLang at base_url below.
+  # provider: "openai" uses the OpenAI API with the key from OPENAI_API_KEY env var.
+  # Changing this at runtime requires a server restart (not hot-reloaded).
+  provider: "local"
   base_url: "http://localhost:30000/v1"
   model_name: "tgi"
   max_tokens: 8192          # output reserve (max completion tokens), NOT the context limit
@@ -21,6 +25,13 @@ llm:
                             # --context-length, so it defaults to Qwen2.5-7B's native 32k.
                             # If --context-length is ever set below this, lower to match.
   temperature: 0.7
+
+  # OpenAI settings — used when provider: "openai".
+  # gpt-4o is the flagship; swap for o3 or gpt-4o-mini as needed.
+  openai_model: "gpt-4o"
+  openai_base_url: "https://api.openai.com/v1"
+  openai_context_window: 128000
+  openai_max_tokens: 16384
 
 database:
   url: "${DB_URL}"
