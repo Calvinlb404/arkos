@@ -68,25 +68,45 @@ smithery:
   base_url: "https://api.smithery.ai"
 
 mcp_servers:
-  # The Linear demo target. requires_auth => Smithery's hosted OAuth flow.
+  # requires_auth: true  => Smithery's hosted per-user OAuth flow (user connects in
+  #                         the settings panel). requires_auth: false => shared.
+  # Add more servers by copying from https://smithery.ai/server/<name>.
+
   linear:
     mcp_url: "https://linear.run.tools"
     requires_auth: true
     name: "Linear"
 
-  # Add more servers by copying from https://smithery.ai/server/<name>.
-  # Example (commented so a missing API key doesn't break startup):
-  #
-  # brave-search:
-  #   mcp_url: "https://brave.run.tools"
-  #   requires_auth: false
-  #   headers:
-  #     braveApiKey: "${BRAVE_API_KEY}"
-  #
   google-calendar:
     mcp_url: "https://googlecalendar.run.tools"
     requires_auth: true
     name: "Google Calendar"
+
+  gmail:
+    mcp_url: "https://gmail.run.tools"
+    requires_auth: true
+    name: "Gmail"
+
+  slack:
+    mcp_url: "https://slack.run.tools"
+    requires_auth: true
+    name: "Slack"
+
+  github:
+    mcp_url: "https://github.run.tools"
+    requires_auth: true
+    name: "GitHub"
+
+  notion:
+    mcp_url: "https://notion.run.tools"
+    requires_auth: true
+    name: "Notion"
+
+  # No-auth shared service (API-key servers use `headers`; Parallel needs none).
+  parallel-search:
+    mcp_url: "https://search--parallel.run.tools"
+    requires_auth: false
+    name: "Parallel Web Search"
 
 
 
