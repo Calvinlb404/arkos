@@ -601,3 +601,15 @@ one file. This test pins that the promise is real and won't silently break when
 - Run the decisive diagnostic query (Technical Background) before starting: it
   tells you whether the first missing task you see is Mechanism 1 (Task 1) or
   Mechanism 2 (Task 2), so you fix the one that's actually biting first.
+- **Tool state vs conversation memory (2026-06-17).** These are different things.
+  Conversation memory (`conversation_context`, mem0) is persistent Postgres/vector
+  state keyed by `user_id` — fully shared between buddy and executor subagents.
+  Tool state (`tool_manager._user_tools`) is a transient Python dict in the
+  FastAPI process, populated lazily only when a user sends a chat message through
+  `/v1/chat/completions`. It is lost on every server restart and was never written
+  by the task runner (which bypasses the chat path entirely). Patched in
+  `task_runner.run_task()` by pre-loading per-user OAuth tools before spawning the
+  executor (commit `42b954e`). The durable fix is to persist connection status (not
+  tokens — those stay in Smithery) in the DB so any code path can load them without
+  requiring a prior chat turn. Track as a follow-on to Task 5 (identity/keyspace
+  consolidation).
