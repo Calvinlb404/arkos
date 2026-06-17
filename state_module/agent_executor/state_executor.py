@@ -86,12 +86,23 @@ class StateExecutor(State):
                 for _server, tools in servers.items():
                     for tname, tspec in tools.items():
                         tool_names.append(tname)
-                        desc = (
-                            tspec.get("description", "")
-                            if isinstance(tspec, dict)
-                            else getattr(tspec, "description", "")
-                        ) or ""
-                        tool_lines.append(f"- {tname}: {desc[:160]}")
+                        spec = tspec if isinstance(tspec, dict) else {}
+                        desc = (spec.get("description") or getattr(tspec, "description", "") or "")
+                        desc_short = desc.strip().splitlines()[0][:120] if desc.strip() else ""
+
+                        # Include required + optional param names so the model
+                        # doesn't guess field names from training-data knowledge
+                        # of the raw API (e.g. guessing end.dateTime vs end_time).
+                        schema = spec.get("inputSchema") or spec.get("input_schema") or {}
+                        props = schema.get("properties") or {}
+                        required = set(schema.get("required") or [])
+                        if props:
+                            req_params = [f"{k}*" for k in props if k in required]
+                            opt_params = [k for k in props if k not in required]
+                            params_str = ", ".join(req_params + opt_params)
+                            tool_lines.append(f"- {tname}({params_str}): {desc_short}")
+                        else:
+                            tool_lines.append(f"- {tname}: {desc_short}")
             except Exception as e:
                 if task_id:
                     log_event(task_id, "error", f"could not list tools: {e}")
@@ -111,7 +122,8 @@ class StateExecutor(State):
                 "In that case: first call list_calendars, then on the next decision call create_event, "
                 "then advance once the event is confirmed created.\n\n"
                 "NEVER advance a step unless a tool_result in the conversation confirms it succeeded.\n"
-                "Never invent tool names. Pick from the list below.\n\n"
+                "Never invent tool names or parameter names. Use ONLY the tools and params listed below.\n"
+                "Parameters marked with * are required. Use exact parameter names as shown.\n\n"
                 f"Available tools:\n{tools_block}\n\n"
                 f"Current plan step ({step_idx + 1}/{len(plan_steps)}): {current_step}\n"
             )
