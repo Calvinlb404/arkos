@@ -102,10 +102,14 @@ mcp_servers:
     requires_auth: true
     name: "Notion"
 
-  # No-auth shared service (API-key servers use `headers`; Parallel needs none).
+  # Parallel needs no OAuth, but we still want a per-user on/off toggle in
+  # settings. requires_auth: true makes it a per-user connection (so connect =
+  # turn on); oauth: false tells the frontend to skip the OAuth popup since the
+  # connection comes back `connected` instantly with no setup URL.
   parallel-search:
     mcp_url: "https://search--parallel.run.tools"
-    requires_auth: false
+    requires_auth: true
+    oauth: false
     name: "Parallel Web Search"
 
 

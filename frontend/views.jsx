@@ -263,7 +263,17 @@ function SettingsModal({ data, onClose, onSignOut }) {
     }, 2000);
   }
 
-  function connect(service) {
+  function connect(service, oauth = true) {
+    // No-OAuth services (e.g. Parallel) connect instantly with no setup URL,
+    // so there's no popup to open — just turn it on and refresh.
+    if (oauth === false) {
+      setBusy((b) => ({ ...b, [service]: true }));
+      api.connectService(service)
+        .then(() => refresh())
+        .catch((e) => setServices((s) => ({ ...(s || {}), error: String(e) })))
+        .finally(() => setBusy((b) => ({ ...b, [service]: false })));
+      return;
+    }
     // Open the popup SYNCHRONOUSLY inside the click handler. If we open it
     // after `await api.connectService`, the browser has lost the user-gesture
     // and silently blocks it (the "nothing happens" bug). We open a blank
@@ -340,7 +350,7 @@ function SettingsModal({ data, onClose, onSignOut }) {
                       ? <button className="btn" disabled={busy[c.service]} onClick={() => disconnect(c.service)}>disconnect</button>
                       : authLink[c.service]
                         ? <a className="btn primary" href={authLink[c.service]} target="ark_oauth" rel="noopener" onClick={() => startPoll(c.service, null)}>authorize →</a>
-                        : <button className="btn primary" disabled={busy[c.service]} onClick={() => connect(c.service)}>{busy[c.service] ? "…" : "connect"}</button>
+                        : <button className="btn primary" disabled={busy[c.service]} onClick={() => connect(c.service, c.oauth !== false)}>{busy[c.service] ? "…" : "connect"}</button>
                   ) : (
                     <span className="soft" style={{ fontSize: 10 }}>always on</span>
                   )}
