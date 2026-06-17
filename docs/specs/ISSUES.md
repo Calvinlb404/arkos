@@ -387,6 +387,66 @@ repair on read. Do **not** wrap these in the repair helper.
 
 ---
 
+## Task 8: Collapse routers into the graph (single-traversal routing)
+
+**Problem:** Routing requires three artifacts kept in sync by hand — the signal
+string a state emits in `structured_data["route"]`, the router function that
+translates it to a state name, and the graph YAML's `transition.next` list. All
+three must be updated together for any routing change. When they drift, failures
+are silent: we added `action=advance` to the executor, missed the router and the
+graph, and multi-step tasks silently ended after the first step.
+
+**Background — how LangGraph does it:** after a node runs, one routing function
+reads the updated state and returns the next node name directly. No intermediate
+signal object, no translation layer, no separate router file. Node updates state →
+routing function reads state → returns destination. Single traversal, one source
+of truth.
+
+ARKOS currently does two traversals: state emits a signal → router translates it
+→ graph validates the result. The router `routers.py` is a third file that
+duplicates information already in the YAML, and `StateHandler` must load both. The
+only reason the pattern exists is the CLAUDE.md contract that states must not
+hardcode their successor names — that decoupling is worth preserving, but the
+implementation is more complex than necessary.
+
+**Done when:**
+- The graph YAML supports declaring signal→state mappings inline on each
+  transition, e.g.:
+
+  ```yaml
+  executor:
+    transition:
+      edges:
+        tool:     use_tool
+        ask:      ask_human
+        continue: executor
+        _default: executor_done
+  ```
+
+- `StateHandler` auto-generates a router from the YAML for any state that uses
+  `edges:` — no `routers.py` entry needed for simple signal→state maps.
+- States still emit semantic signals (`"plan"`, `"tool"`, `"continue"`) — the
+  decoupling from successor names is preserved.
+- `routers.py` is kept only for states whose routing logic is too complex to
+  express as a flat signal map (e.g. inspecting `output.content` or combining
+  multiple fields). Simple cases need no Python at all.
+- A routing change (new signal, new successor) requires editing exactly one file:
+  `graph.yaml`.
+
+**Touch point:** `state_module/core/state_handler.py` (auto-router generation),
+`state_module/agent_executor/graph.yaml` + `routers.py` (migrate to inline edges),
+`state_module/agent_buddy/graph.yaml` + `routers.py` (migrate simple cases).
+
+**Priority:** P2 | **Effort:** ~1–2 days | **Blockers:** none
+
+**Out of scope:** replacing the Python override path for complex routers (those
+stay as functions); changing the signal protocol states use.
+
+**Acceptance test:** `test_yaml_edge_map_routes_without_router_function`,
+`test_routing_change_requires_only_graph_edit` (below).
+
+---
+
 # Tests
 
 ## Test 1: test_completed_task_stays_visible
@@ -484,6 +544,31 @@ model; an unrecoverable input raises one well-defined error, not a silent drop.
 
 **Why this matters:** Pins that repair lives in the one helper and that every state
 inherits it by calling that helper, not by re-implementing parsing.
+
+---
+
+## Test 10: test_yaml_edge_map_routes_without_router_function
+
+**What it verifies:** A state whose graph YAML uses `edges:` (signal→state map)
+is routed correctly by `StateHandler` without any entry in `routers.py` — the
+auto-generated router picks the right successor for each signal, and falls back
+to `_default` for unknown signals.
+
+**Why this matters:** Pins that the graph is the single source of truth for simple
+routing. If a router function is accidentally left in place alongside an `edges:`
+map, the test should confirm the YAML wins.
+
+---
+
+## Test 11: test_routing_change_requires_only_graph_edit
+
+**What it verifies:** Adding a new signal→state mapping to `graph.yaml` (no
+`routers.py` change, no state code change) causes the harness to route that signal
+to the new successor correctly.
+
+**Why this matters:** The whole point of the task is that a routing change touches
+one file. This test pins that the promise is real and won't silently break when
+`StateHandler` is extended.
 
 ---
 
