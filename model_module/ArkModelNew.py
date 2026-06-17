@@ -63,20 +63,16 @@ class AIMessage(Message):
 
 class ArkModelLink(BaseModel):
     """
-    Chat model backed by either a local SGLang/TGI endpoint or the OpenAI API.
+    A custom chat model designed to interface with Hugging Face TGI
+    servers that expose an OpenAI-compatible API, supporting tool calling.
 
-    Both speak the OpenAI-compatible REST protocol so the same client works for
-    both. Set api_key="-" for local endpoints (no real auth needed); set it to
-    the real OPENAI_API_KEY value for the OpenAI backend.
+    This version uses the AsyncOpenAI client for non-blocking I/O.
     """
 
     model_name: str = Field(default="tgi")
     base_url: str = Field(default="http://0.0.0.0:30000/v1")
     max_tokens: int = Field(default=1024)
     temperature: float = Field(default=0.7)
-    api_key: str = Field(default="-")  # "-" = local placeholder; real key for OpenAI
-    # Newer OpenAI models (gpt-5.x) use max_completion_tokens instead of max_tokens.
-    use_max_completion_tokens: bool = Field(default=False)
 
     # Use a property or method to initialize the client asynchronously if needed,
     # or just create it in the async method, as AsyncOpenAI handles the session.
@@ -88,7 +84,7 @@ class ArkModelLink(BaseModel):
         """Returns the configured AsyncOpenAI client."""
         return AsyncOpenAI(
             base_url=self.base_url,
-            api_key=self.api_key,
+            api_key="-",  # Placeholder/Dummy API key
         )
 
     async def make_llm_call(self, messages: list[Message], json_schema: Optional, stream=False) -> dict[str, Any] | str:
@@ -133,16 +129,11 @@ class ArkModelLink(BaseModel):
             raise NotImplementedError("Streaming not yet implemented; use generate_stream.")
 
         try:
-            token_kwarg = (
-                {"max_completion_tokens": self.max_tokens}
-                if self.use_max_completion_tokens
-                else {"max_tokens": self.max_tokens}
-            )
             chat_completion = await self.client.chat.completions.create(
                 model=self.model_name,
                 messages=openai_messages_payload,
+                max_tokens=self.max_tokens,
                 temperature=self.temperature,
-                **token_kwarg,
                 response_format=json_schema,
             )
             return chat_completion.choices[0].message.content
