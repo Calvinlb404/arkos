@@ -136,6 +136,23 @@ async def _run_task_inner(task_id: str) -> None:
     )
 
     llm, shared_tm = _shared_deps()
+
+    # Ensure per-user OAuth tools are loaded before spawning the executor.
+    # chat_completions does this lazily, but the task runner bypasses that
+    # endpoint entirely — so if the server restarted or the user hasn't
+    # chatted recently, _user_tools is empty and the executor sees no tools.
+    if shared_tm:
+        import aiohttp as _aiohttp
+        import contextlib as _contextlib
+        async with _aiohttp.ClientSession() as _sess:
+            for svc_name, spec in (shared_tm.servers or {}).items():
+                if not spec.get("requires_auth"):
+                    continue
+                if svc_name in (shared_tm._user_tools.get(user_id) or {}):
+                    continue
+                with _contextlib.suppress(Exception):
+                    await shared_tm._ensure_user_server(_sess, user_id, svc_name)
+
     tool_manager = ScopedToolManager(shared_tm, allowed=required_tools) if shared_tm else None
 
     flow = StateHandler(
