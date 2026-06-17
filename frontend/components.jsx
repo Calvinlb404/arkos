@@ -113,9 +113,17 @@ function PlanCard({ plan, resolved, error, onApprove, onDecline }) {
 }
 
 /* ---- task row (expandable event log) ---- */
-function TaskRow({ item }) {
+function TaskRow({ item, onCancel }) {
   const [open, setOpen] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const running = item.state === "run";
+
+  async function cancel(e) {
+    e.stopPropagation();
+    setCancelling(true);
+    try { await api.cancelTask(item.id); } catch { /* ignored — poll will refresh */ }
+  }
+
   return (
     <div className={"row col" + (open ? " expanded" : "")}>
       <div className="row-top" style={{ cursor: item.events ? "pointer" : "default" }} onClick={() => item.events && setOpen((o) => !o)}>
@@ -123,7 +131,19 @@ function TaskRow({ item }) {
           {running ? <span className="spin" /> : <Dot kind={item.state === "done" ? "live" : "stop"} />}
           <span className="text">{item.text} <span className="src">· {item.src}</span></span>
         </span>
-        <span className="when">{item.when}</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="when">{item.when}</span>
+          {running && (
+            <button
+              className="btn ghost"
+              style={{ fontSize: "0.75em", padding: "2px 8px", opacity: cancelling ? 0.4 : 1 }}
+              disabled={cancelling}
+              onClick={cancel}
+            >
+              cancel
+            </button>
+          )}
+        </span>
       </div>
       {item.events && (
         <div className={"events" + (open ? " open" : "")}>
