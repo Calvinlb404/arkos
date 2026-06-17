@@ -34,7 +34,12 @@ class _AskKind(StrEnum):
 
 
 class ExecutorDecision(BaseModel):
-    """Structured choice for the current plan step."""
+    """Structured choice for the current plan step.
+
+    tool_args is intentionally absent — args are filled in a separate
+    schema-constrained call using the selected tool's inputSchema so the
+    model cannot hallucinate parameter names from training data.
+    """
 
     action: _ActionKind = Field(
         ...,
@@ -44,7 +49,6 @@ class ExecutorDecision(BaseModel):
 
     # populated when action == tool
     tool_name: str | None = Field(None, description="Exact tool name from the tool list")
-    tool_args: dict | None = Field(None, description="Arguments dict for the tool")
 
     # populated when action == ask
     ask_kind: _AskKind | None = Field(None, description="binary (approve/deny) or text (free-form answer)")
@@ -80,6 +84,7 @@ class StateExecutor(State):
 
         tool_lines: list[str] = []
         tool_names: list[str] = []
+        tool_specs: dict[str, dict] = {}   # tool_name -> full spec (for arg schema)
         if agent.tool_manager is not None:
             try:
                 servers = await agent.tool_manager.list_all_tools(agent.current_user_id)
@@ -87,6 +92,7 @@ class StateExecutor(State):
                     for tname, tspec in tools.items():
                         tool_names.append(tname)
                         spec = tspec if isinstance(tspec, dict) else {}
+                        tool_specs[tname] = spec
                         desc = (spec.get("description") or getattr(tspec, "description", "") or "")
                         desc_short = desc.strip().splitlines()[0][:120] if desc.strip() else ""
 
@@ -196,12 +202,45 @@ class StateExecutor(State):
                     structured_data={"route": "ask"},
                 )
 
-            agent.pending_tool = {
-                "tool_name": decision.tool_name,
-                "tool_args": decision.tool_args or {},
-            }
+            # Second constrained call: fill tool args using the tool's own
+            # inputSchema so the model cannot emit param names that don't exist
+            # in the schema (e.g. end_datetime when the tool only has
+            # event_duration_hour/event_duration_minutes).
+            tool_name = decision.tool_name
+            tool_args: dict = {}
+            input_schema = (tool_specs.get(tool_name) or {}).get("inputSchema") or {}
+            if input_schema and input_schema.get("properties"):
+                args_system = SystemMessage(
+                    content=(
+                        f"Fill in the arguments for the tool '{tool_name}' to accomplish:\n"
+                        f"{current_step}\n\n"
+                        "Use ONLY the parameter names defined in the JSON schema. "
+                        "Do not add any other keys. Use exact formats shown in descriptions."
+                    )
+                )
+                args_schema = {
+                    "type": "json_schema",
+                    "json_schema": {"name": "tool_args", "schema": input_schema},
+                }
+                try:
+                    args_output = await agent.call_llm(
+                        context=[args_system] + list(context), json_schema=args_schema
+                    )
+                    import json as _json
+                    try:
+                        from json_repair import repair_json
+                        raw = repair_json(args_output.content or "{}", return_objects=False)
+                    except Exception:
+                        raw = args_output.content or "{}"
+                    tool_args = _json.loads(raw) if raw else {}
+                except Exception as e:
+                    if task_id:
+                        log_event(task_id, "error", f"arg-fill call failed for {tool_name}: {e}")
+                    tool_args = {}
+
+            agent.pending_tool = {"tool_name": tool_name, "tool_args": tool_args}
             return StateOutput(
-                content=f"calling tool `{decision.tool_name}` for step {step_idx + 1}",
+                content=f"calling tool `{tool_name}` for step {step_idx + 1}",
                 completion_signal="incomplete",
                 structured_data={"route": "tool"},
             )
