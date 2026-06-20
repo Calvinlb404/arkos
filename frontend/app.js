@@ -442,6 +442,7 @@ function openSettings() {
   document.getElementById('settingsBackend').textContent = CONFIG.backend;
   settingsModal.classList.add('open');
   refreshConnections();
+  loadSlackUserId();
 }
 function closeSettings() {
   settingsModal.classList.remove('open');
@@ -580,6 +581,56 @@ connList.addEventListener('click', (e) => {
   const discBtn = e.target.closest('[data-disconnect]');
   if (discBtn) {
     disconnectService(discBtn.getAttribute('data-disconnect'));
+  }
+});
+
+// ---------- slack member id ----------
+async function loadSlackUserId() {
+  try {
+    const r = await fetch(CONFIG.backend + '/auth/me', { headers: authHeaders() });
+    if (!r.ok) return;
+    const d = await r.json();
+    const input = document.getElementById('slackUserIdInput');
+    const statusEl = document.getElementById('slackStatus');
+    if (d.slack_user_id) {
+      input.value = d.slack_user_id;
+      statusEl.textContent = 'connected';
+      statusEl.className = 'status ok';
+    } else {
+      statusEl.textContent = 'not set';
+      statusEl.className = 'status';
+    }
+  } catch (_) {}
+}
+
+document.getElementById('slackSaveBtn').addEventListener('click', async () => {
+  const input = document.getElementById('slackUserIdInput');
+  const statusEl = document.getElementById('slackStatus');
+  const btn = document.getElementById('slackSaveBtn');
+  const val = input.value.trim();
+  if (!val) return;
+  btn.disabled = true;
+  btn.textContent = 'saving...';
+  try {
+    const r = await fetch(CONFIG.backend + '/auth/slack-connect', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ slack_user_id: val }),
+    });
+    if (r.ok) {
+      statusEl.textContent = 'connected';
+      statusEl.className = 'status ok';
+    } else {
+      const e = await r.json().catch(() => ({}));
+      statusEl.textContent = e.detail || 'error';
+      statusEl.className = 'status err';
+    }
+  } catch (_) {
+    statusEl.textContent = 'error';
+    statusEl.className = 'status err';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'save';
   }
 });
 
