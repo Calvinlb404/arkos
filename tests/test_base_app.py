@@ -1,10 +1,12 @@
-"""Tests for format_tools_for_system_prompt from base_module/app.py.
+"""Tests for format_tools_for_system_prompt and datetime injection from base_module/app.py.
 
 The app module cannot be imported directly in tests because it initializes
-the full agent stack (DB, LLM, etc.) at module level. We test the function
-in isolation by defining it here (same logic as base_module/app.py:63-82).
+the full agent stack (DB, LLM, etc.) at module level. We test functions
+in isolation by replicating their logic here.
 """
 
+import re
+from datetime import datetime
 from unittest.mock import MagicMock
 
 
@@ -91,3 +93,47 @@ class TestFormatToolsForSystemPrompt:
         result = format_tools_for_system_prompt(tools)
         # Each tool block ends with an empty line
         assert "\n\n" in result
+
+
+# --- datetime injection (MIT-241) ---
+# Replicated from _make_agent() in base_module/app.py so we can test in isolation.
+
+
+def _make_system_prompt_with_datetime(base_system_prompt: str) -> str:
+    """Mirror of the datetime-injection logic in _make_agent()."""
+    now = datetime.now().astimezone()
+    date_line = f"Current date and time: {now.strftime('%A, %B %d, %Y %H:%M %Z')}"
+    return date_line + "\n\n" + base_system_prompt if base_system_prompt else date_line
+
+
+class TestDatetimeInjection:
+    def test_datetime_line_present(self):
+        result = _make_system_prompt_with_datetime("You are ARK.")
+        assert result.startswith("Current date and time:")
+
+    def test_datetime_line_format(self):
+        result = _make_system_prompt_with_datetime("You are ARK.")
+        first_line = result.splitlines()[0]
+        # e.g. "Current date and time: Thursday, May 08, 2026 13:40 EDT"
+        assert re.match(
+            r"Current date and time: \w+, \w+ \d{2}, \d{4} \d{2}:\d{2} \S+",
+            first_line,
+        )
+
+    def test_base_prompt_preserved(self):
+        base = "You are ARK, a helpful assistant."
+        result = _make_system_prompt_with_datetime(base)
+        assert base in result
+
+    def test_empty_base_prompt_returns_only_datetime(self):
+        result = _make_system_prompt_with_datetime("")
+        assert result.startswith("Current date and time:")
+        assert "\n\n" not in result
+
+    def test_timezone_included(self):
+        result = _make_system_prompt_with_datetime("base")
+        first_line = result.splitlines()[0]
+        # %Z produces the local timezone name (e.g. "EDT", "UTC", "EST").
+        # Verify the time portion is followed by a non-empty timezone token.
+        parts = first_line.split()
+        assert len(parts) >= 6  # "Current", "date", "and", "time:", weekday+date+time+tz

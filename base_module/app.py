@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import uuid
+from datetime import datetime
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -20,7 +21,8 @@ from base_module.users import router as users_router
 from config_module.loader import config
 from memory_module.memory import Memory
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage
-from state_module.state_handler import StateHandler
+from state_module.agent_buddy.routers import ROUTERS as BUDDY_ROUTERS
+from state_module.core.state_handler import StateHandler
 from tool_module.browser_tool import register_browser_tool
 from tool_module.smithery import AuthRequiredError
 from tool_module.tool_call import MCPToolManager
@@ -50,7 +52,11 @@ else:
 
 
 # Shared singletons (no per-user state)
-flow = StateHandler(yaml_path=config.get("state.graph_path"))
+flow = StateHandler(
+    yaml_path=config.get("state.graph_path"),
+    agent_pkg="state_module.agent_buddy",
+    routers=BUDDY_ROUTERS,
+)
 llm = ArkModelLink(base_url=config.get("llm.base_url"), max_tokens=config.get("llm.max_tokens"))
 
 # Per-user memory cache — keyed by user_id string.
@@ -82,7 +88,9 @@ def _make_agent(user_id: str) -> Agent:
         llm=llm,
         tool_manager=tool_manager,
     )
-    ag.system_prompt = _system_prompt
+    now = datetime.now().astimezone()
+    date_line = f"Current date and time: {now.strftime('%A, %B %d, %Y %H:%M %Z')}"
+    ag.system_prompt = date_line + "\n\n" + _system_prompt if _system_prompt else date_line
     ag.available_tools = _available_tools
     return ag
 
@@ -502,7 +510,7 @@ async def chat_completions(request: Request):
     req_agent = _make_agent(effective_user_id)
 
     context_msgs = []
-    context_msgs.append(SystemMessage(content=_system_prompt))
+    context_msgs.append(SystemMessage(content=req_agent.system_prompt))
 
     # Convert OAI messages into internal message objects
     for msg in messages:
