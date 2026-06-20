@@ -48,17 +48,44 @@ class StatePlan(State):
     async def run(self, context, agent=None):
         messages = context if isinstance(context, list) else context.get("messages", [])
 
-        system = SystemMessage(
-            content=(
-                "You are buddy in planning mode.\n"
-                "Workshop a concrete plan with the user BEFORE acting.\n"
-                "Return JSON matching the provided schema.\n"
-                "Plan steps must be numbered actions, each one sentence.\n"
-                "If you truly lack information, set needs_clarification=true and include a single "
-                "clarifying question.\n"
-                "Otherwise provide at least 2 plan_steps."
-            )
+        # The agent's root system prompt carries the live tool catalog. Without
+        # it, the LLM doesn't know what tools exist and ends up writing prose
+        # like "Opened https://example.com in the browser" instead of an
+        # imperative tool call. The executor can't act on prose, so it routes
+        # to ask_human and the task stalls in awaiting_approval.
+        root_prompt = (getattr(agent, "system_prompt", None) or "").strip()
+
+        plan_guidance = (
+            "You are buddy in planning mode.\n"
+            "Workshop a concrete, forward-looking plan with the user BEFORE acting.\n"
+            "Return JSON matching the provided schema.\n"
+            "\n"
+            "Hard rules for plan_steps:\n"
+            "  - Each step is something buddy WILL DO, not something that has "
+            "happened. Use imperative voice: 'Open ...', 'Send ...', 'Fetch ...', "
+            "'Use ... to ...'. NEVER write past tense like 'Opened ...' or 'Retrieved ...'.\n"
+            "  - Each step must name the SPECIFIC tool from the catalog above "
+            "that will execute it. Example: 'Use browser_task to open "
+            "https://example.com and return the page title.'\n"
+            "  - Do NOT pre-describe the result. Don't write a step that says "
+            "'Title of the page is X' — that's the outcome, not the action.\n"
+            "  - Do NOT split one tool call into multiple steps. One concrete "
+            "action = one step.\n"
+            "\n"
+            "Also set required_tools to the set of tool names referenced.\n"
+            "\n"
+            "If you truly lack information, set needs_clarification=true and include "
+            "a single clarifying question. Otherwise provide 1 or more plan_steps.\n"
+            "\n"
+            "Example good plan for 'open example.com and tell me the title':\n"
+            '  title: "Get example.com title"\n'
+            '  plan_steps: ["Use browser_task to open https://example.com and return the page title."]\n'
+            '  required_tools: ["browser_task"]\n'
         )
+        if root_prompt:
+            system = SystemMessage(content=root_prompt + "\n\n" + plan_guidance)
+        else:
+            system = SystemMessage(content=plan_guidance)
 
         schema = {
             "type": "json_schema",

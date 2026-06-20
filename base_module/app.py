@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from agent_module.agent import Agent
+from base_module.browser_routes import router as browser_router
 from base_module.tasks import router as tasks_router
 from base_module.users import router as users_router
 from config_module.loader import config
@@ -22,6 +23,7 @@ from memory_module.memory import Memory
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage
 from state_module.agent_buddy.routers import ROUTERS as BUDDY_ROUTERS
 from state_module.core.state_handler import StateHandler
+from tool_module.browser_tool import register_browser_tool
 from tool_module.smithery import AuthRequiredError
 from tool_module.tool_call import MCPToolManager
 
@@ -38,6 +40,7 @@ app.add_middleware(
 
 app.include_router(users_router)
 app.include_router(tasks_router)
+app.include_router(browser_router)
 
 # Serve the ark frontend at /app/ if the folder exists
 _FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
@@ -196,6 +199,7 @@ async def startup():
 
     if tool_manager:
         await tool_manager.initialize_servers()
+        register_browser_tool(tool_manager)
 
         _available_tools = await tool_manager.list_all_tools()
 

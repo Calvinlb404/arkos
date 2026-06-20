@@ -15,6 +15,7 @@ services:
       - TEI_URL=http://tei:80
       - SUPABASE_URL=http://supabase-rest:3000
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
+      - BROWSERLESS_URL=ws://browserless:3000
     env_file:
       - .env
     depends_on:
@@ -99,6 +100,13 @@ services:
     image: ghcr.io/browserless/chromium:latest
     ports:
       - "3000:3000"
+    environment:
+      - CONCURRENT=${BROWSERLESS_CONCURRENT:-10}
+      # TIMEOUT must be strictly greater than browser_task's wall-clock cap
+      # (BROWSER_USE_MAX_SECONDS, default 180s). If Browserless wins the
+      # race, the app reports 'wall-clock exceeded' when the real cause was
+      # the container killing the session — wrong diagnosis to ship.
+      - TIMEOUT=${BROWSERLESS_TIMEOUT:-300000}
     restart: unless-stopped
     networks:
       - arkos-network
