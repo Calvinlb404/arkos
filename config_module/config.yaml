@@ -1,6 +1,6 @@
 app:
   host: "0.0.0.0"
-  port: "1114"
+  port: "1121"
   reload: true
   system_prompt: |
     THIS IS A NEW CONVERSATION (past converation info is above)
@@ -66,6 +66,13 @@ mcp_servers:
     mcp_url: "https://googlecalendar.run.tools"
     requires_auth: true
     name: "Google Calendar"
+
+  slack:
+    mcp_url: "https://slack--node2flow.run.tools"
+    requires_auth: false
+    name: "Slack"
+    headers:
+      SLACK_BOT_TOKEN: "${SLACK_BOT_TOKEN}"
 
 
 
