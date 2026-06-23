@@ -35,10 +35,13 @@ class StateExecutorDone(State):
             system = SystemMessage(
                 content=(
                     "You are summarising the results of a completed task for the user.\n"
-                    "Based on the conversation above (which contains tool call results), "
-                    "write a clear, concise summary of what was found or accomplished. "
-                    "Include the actual data returned (e.g. event names, times, titles). "
-                    "Do not say 'the task is complete' — just present the results naturally. "
+                    "CRITICAL: Only report actions that are confirmed by an actual tool_result "
+                    "in the conversation above. Do NOT infer, assume, or describe actions that "
+                    "do not have a corresponding tool_result confirming they succeeded.\n"
+                    "If a plan step has no tool_result proving it ran, say 'Step N was not completed' "
+                    "rather than describing a fabricated outcome.\n"
+                    "Include actual data returned by tools (IDs, names, times). "
+                    "Do not say 'the task is complete' — present only what the tools confirmed. "
                     "Keep it under 200 words."
                 )
             )

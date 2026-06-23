@@ -18,14 +18,17 @@ def agent_reply_router(output: StateOutput) -> str:
 
     Signals
     -------
-    plan   -> workshop_plan  (user asked buddy to DO something concrete)
-    ask    -> ask_user       (buddy needs clarification)
-    reply  -> ask_user       (simple answer; hand back to user)
-    <none> -> ask_user       (safe default)
+    plan     -> workshop_plan   (multi-step external-service action, needs approval)
+    computer -> computer_plan   (computer task -- workshop a plan, then approve to run)
+    ask      -> ask_user        (buddy needs clarification)
+    reply    -> ask_user        (simple answer; hand back to user)
+    <none>   -> ask_user        (safe default)
     """
     route = (output.structured_data or {}).get("route", "")
     if route == "plan":
         return "workshop_plan"
+    if route == "computer":
+        return "computer_plan"
     return "ask_user"
 
 

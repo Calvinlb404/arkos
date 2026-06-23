@@ -16,7 +16,10 @@ app:
 llm:
   base_url: "http://localhost:30000/v1"
   model_name: "tgi"
-  max_tokens: 8192
+  max_tokens: 8192          # output reserve (max completion tokens), NOT the context limit
+  context_window: 32768     # total in+out the model accepts. SGLang on :30000 launched without
+                            # --context-length, so it defaults to Qwen2.5-7B's native 32k.
+                            # If --context-length is ever set below this, lower to match.
   temperature: 0.7
 
 database:
@@ -38,6 +41,24 @@ embedding:
 state:
   graph_path: "state_module/agent_buddy/graph.yaml"
 
+# The computer-agent does real work in a per-user e2b sandbox (files + shell).
+# For the MVP it runs on the LOCAL model (kept as a separate key so swapping to a
+# frontier model later is one line). The E2B SDK reads E2B_API_KEY from the
+# environment directly, so it is intentionally NOT referenced here -- that keeps
+# config load from crashing when the key is unset during early setup.
+computer_agent:
+  llm:
+    base_url: "http://localhost:30000/v1"   # local model now; point at a frontier endpoint later
+    model_name: "Qwen/Qwen3-8B"
+    max_tokens: 4096
+    temperature: 0.7
+    # To enable native tool-calling: restart SGLang with --tool-call-parser qwen3
+    # Without it, the agent falls back to constrained-JSON action format automatically.
+  sandbox:
+    template: "base"                         # e2b template
+    timeout_seconds: 300                     # keep-alive while working
+    idle_timeout_seconds: 900                # pause after this much idle (lifecycle, later)
+
 # All MCP traffic flows through Smithery Connect. No local subprocesses, no
 # per-provider OAuth plumbing on our side. Smithery maintains the OAuth apps,
 # stores credentials write-only, and refreshes tokens automatically.
@@ -47,21 +68,15 @@ smithery:
   base_url: "https://api.smithery.ai"
 
 mcp_servers:
-  # The Linear demo target. requires_auth => Smithery's hosted OAuth flow.
+  # requires_auth: true  => Smithery's hosted per-user OAuth flow (user connects in
+  #                         the settings panel). requires_auth: false => shared.
+  # Add more servers by copying from https://smithery.ai/server/<name>.
+
   linear:
     mcp_url: "https://linear.run.tools"
     requires_auth: true
     name: "Linear"
 
-  # Add more servers by copying from https://smithery.ai/server/<name>.
-  # Example (commented so a missing API key doesn't break startup):
-  #
-  # brave-search:
-  #   mcp_url: "https://brave.run.tools"
-  #   requires_auth: false
-  #   headers:
-  #     braveApiKey: "${BRAVE_API_KEY}"
-  #
   google-calendar:
     mcp_url: "https://googlecalendar.run.tools"
     requires_auth: true
@@ -73,6 +88,26 @@ mcp_servers:
     name: "Slack"
     headers:
       SLACK_BOT_TOKEN: "${SLACK_BOT_TOKEN}"
+
+  gmail:
+    mcp_url: "https://gmail.run.tools"
+    requires_auth: true
+    name: "Gmail"
+
+  github:
+    mcp_url: "https://github.run.tools"
+    requires_auth: true
+    name: "GitHub"
+
+  notion:
+    mcp_url: "https://notion.run.tools"
+    requires_auth: true
+    name: "Notion"
+
+  parallel-search:
+    mcp_url: "https://search--parallel.run.tools"
+    requires_auth: true
+    name: "Parallel Web Search"
 
 
 

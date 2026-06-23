@@ -7,6 +7,7 @@ states can import it without pulling the FastAPI router.
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 import psycopg2
@@ -19,14 +20,25 @@ def _connect():
     return psycopg2.connect(config.get("database.url"))
 
 
+def _user_uuid(user_id_str: str) -> uuid.UUID:
+    """Parse the JWT sub (user_id) into a UUID. Demo fallback tolerates non-uuid
+    strings by hashing. This is the single user_id -> tasks DB boundary; the raw
+    sub is what the sandbox/Memory keyspaces use, so convert only here."""
+    try:
+        return uuid.UUID(user_id_str)
+    except (ValueError, TypeError):
+        return uuid.uuid5(uuid.NAMESPACE_URL, f"ark-legacy:{user_id_str}")
+
+
 # ---------- events -----------------------------------------------------------
 def log_event(
     task_id: str,
     kind: str,
     content: str = "",
     payload: dict[str, Any] | None = None,
-) -> None:
-    """Append a row to task_events. Safe to call from any coroutine."""
+) -> int:
+    """Append a row to task_events. Safe to call from any coroutine.
+    Returns the new event_id (used by computer event polling)."""
     conn = _connect()
     try:
         with conn.cursor() as cur:
@@ -34,10 +46,13 @@ def log_event(
                 """
                 INSERT INTO task_events (task_id, kind, content, payload)
                 VALUES (%s, %s, %s, %s)
+                RETURNING event_id
                 """,
                 (task_id, kind, content, json.dumps(payload or {})),
             )
+            event_id = cur.fetchone()[0]
             conn.commit()
+            return int(event_id)
     finally:
         conn.close()
 
@@ -63,12 +78,83 @@ def list_events(task_id: str, user_id: str, after_id: int = 0) -> list[dict[str,
 
 
 # ---------- task status ------------------------------------------------------
+def update_task_status(
+    task_id: str,
+    status: str,
+    *,
+    summary: str | None = None,
+    error: str | None = None,
+    outputs: list[str] | None = None,
+    event_kind: str | None = None,
+    event_content: str = "",
+    event_payload: dict[str, Any] | None = None,
+) -> None:
+    """Atomic: write status + context_payload + one event row in one transaction.
+
+    This is the single correct writer for task status. Using set_task_status,
+    mark_task_completed, or mark_task_failed directly is fine for simple cases
+    but those write status and event separately — a poll can see the new status
+    before its event exists. update_task_status closes that window.
+
+    event_kind defaults to the status value when omitted.
+    """
+    ev_kind = event_kind or status
+    outputs_json = json.dumps(outputs) if outputs is not None else None
+
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            if status == "completed":
+                cur.execute(
+                    """
+                    UPDATE tasks
+                    SET status = 'completed',
+                        updated_at = now(),
+                        context_payload = jsonb_set(
+                            jsonb_set(context_payload, '{summary}', to_jsonb(%s::text), true),
+                            '{outputs}', COALESCE(%s::jsonb, context_payload->'outputs', '[]'::jsonb), true
+                        )
+                    WHERE task_id = %s
+                    """,
+                    (summary or "", outputs_json, task_id),
+                )
+            elif status == "failed":
+                cur.execute(
+                    """
+                    UPDATE tasks
+                    SET status = 'failed',
+                        updated_at = now(),
+                        context_payload = jsonb_set(
+                            jsonb_set(context_payload, '{error}', to_jsonb(%s::text), true),
+                            '{outputs}', COALESCE(%s::jsonb, context_payload->'outputs', '[]'::jsonb), true
+                        )
+                    WHERE task_id = %s
+                    """,
+                    (error or "", outputs_json, task_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE tasks SET status = %s, updated_at = now() WHERE task_id = %s",
+                    (status, task_id),
+                )
+            cur.execute(
+                """
+                INSERT INTO task_events (task_id, kind, content, payload)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (task_id, ev_kind, event_content, json.dumps(event_payload or {})),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+
 def set_task_status(task_id: str, status: str) -> None:
     conn = _connect()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE tasks SET status = %s WHERE task_id = %s",
+                "UPDATE tasks SET status = %s, updated_at = now() WHERE task_id = %s",
                 (status, task_id),
             )
             conn.commit()
@@ -76,7 +162,11 @@ def set_task_status(task_id: str, status: str) -> None:
         conn.close()
 
 
-def mark_task_completed(task_id: str, summary: str | None = None) -> None:
+def mark_task_completed(
+    task_id: str, summary: str | None = None, outputs: list[str] | None = None
+) -> None:
+    """Mark completed; write summary (and optional output paths, for computer
+    tasks) into context_payload."""
     conn = _connect()
     try:
         with conn.cursor() as cur:
@@ -84,22 +174,21 @@ def mark_task_completed(task_id: str, summary: str | None = None) -> None:
                 """
                 UPDATE tasks
                 SET status = 'completed',
+                    updated_at = now(),
                     context_payload = jsonb_set(
-                        context_payload,
-                        '{summary}',
-                        to_jsonb(%s::text),
-                        true
+                        jsonb_set(context_payload, '{summary}', to_jsonb(%s::text), true),
+                        '{outputs}', COALESCE(%s::jsonb, context_payload->'outputs', '[]'::jsonb), true
                     )
                 WHERE task_id = %s
                 """,
-                (summary or "", task_id),
+                (summary or "", json.dumps(outputs) if outputs is not None else None, task_id),
             )
             conn.commit()
     finally:
         conn.close()
 
 
-def mark_task_failed(task_id: str, error: str) -> None:
+def mark_task_failed(task_id: str, error: str, outputs: list[str] | None = None) -> None:
     conn = _connect()
     try:
         with conn.cursor() as cur:
@@ -107,15 +196,14 @@ def mark_task_failed(task_id: str, error: str) -> None:
                 """
                 UPDATE tasks
                 SET status = 'failed',
+                    updated_at = now(),
                     context_payload = jsonb_set(
-                        context_payload,
-                        '{error}',
-                        to_jsonb(%s::text),
-                        true
+                        jsonb_set(context_payload, '{error}', to_jsonb(%s::text), true),
+                        '{outputs}', COALESCE(%s::jsonb, context_payload->'outputs', '[]'::jsonb), true
                     )
                 WHERE task_id = %s
                 """,
-                (error, task_id),
+                (error, json.dumps(outputs) if outputs is not None else None, task_id),
             )
             conn.commit()
     finally:

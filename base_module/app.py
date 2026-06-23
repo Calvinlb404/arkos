@@ -1,9 +1,12 @@
 import json
+import logging
 import os
 import sys
 import time
 import uuid
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -16,8 +19,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from agent_module.agent import Agent
 from base_module.browser_routes import router as browser_router
+from base_module.jwt_utils import CurrentUser, assert_secure_secret
+from base_module.task_store import _user_uuid
 from base_module.tasks import router as tasks_router
 from base_module.users import router as users_router
+from computer_module.computer_router import router as computer_router
 from config_module.loader import config
 from memory_module.memory import Memory
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage
@@ -41,14 +47,15 @@ app.add_middleware(
 app.include_router(users_router)
 app.include_router(tasks_router)
 app.include_router(browser_router)
+app.include_router(computer_router)
 
 # Serve the ark frontend at /app/ if the folder exists
 _FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
 if os.path.isdir(_FRONTEND_DIR):
     app.mount("/app", StaticFiles(directory=_FRONTEND_DIR, html=True), name="frontend")
-    print(f"[ark] serving frontend from {_FRONTEND_DIR} at /app/")
+    logger.info("[ark] serving frontend from %s at /app/", _FRONTEND_DIR)
 else:
-    print(f"[ark] no frontend folder at {_FRONTEND_DIR}; /app route disabled")
+    logger.info("[ark] no frontend folder at %s; /app route disabled", _FRONTEND_DIR)
 
 
 # Shared singletons (no per-user state)
@@ -64,33 +71,79 @@ llm = ArkModelLink(base_url=config.get("llm.base_url"), max_tokens=config.get("l
 _memory_cache: dict[str, Memory] = {}
 
 # Module-level prompt + tools, written by startup/refresh, stamped onto each per-request agent.
+# Concurrency: only ever REASSIGNED as whole new values (never mutated in place),
+# so a concurrent reader sees the old complete value or the new one, never a
+# half-built one. Keep it that way -- build a new dict/str, then assign.
 _system_prompt: str = ""
 _available_tools: dict = {}
 
 
-def _get_or_create_memory(user_id: str) -> Memory:
-    if user_id not in _memory_cache:
-        _memory_cache[user_id] = Memory(
-            user_id=user_id,
-            session_id=None,
+def _get_or_create_memory(user_id: str, session_id: str) -> Memory:
+    # Race-free under single-threaded asyncio: there is NO await between the
+    # `in` check and the assignment, so two requests cannot both create a
+    # Memory for the same key. Do not add an await inside this function, or
+    # you reintroduce the double-init race (MULTIUSER Task 3).
+    #
+    # UUID normalisation (Task 5): conversation_context is keyed by the same
+    # UUID that tasks/approvals use so cross-joins work correctly.
+    #
+    # Cache key includes session_id so each conversation gets its own Memory with
+    # a STABLE session_id. Previously one Memory per user was shared across every
+    # conversation with a single sticky session, and short-term retrieval ignored
+    # the session, so unrelated chats bled into each other (Fix 5).
+    uid = str(_user_uuid(user_id))
+    key = f"{uid}:{session_id}"
+    if key not in _memory_cache:
+        _memory_cache[key] = Memory(
+            user_id=uid,
+            session_id=session_id,
             db_url=config.get("database.url"),
             use_long_term=config.get("memory.use_long_term", False),
         )
-    return _memory_cache[user_id]
+    return _memory_cache[key]
 
 
-def _make_agent(user_id: str) -> Agent:
-    """Create a fresh Agent for one request. Memory is cached per user; everything else is shared."""
+def _make_agent(user_id: str, session_id: str) -> Agent:
+    """Create a fresh Agent for one request. Memory is cached per (user, session); everything else is shared.
+
+    The system prompt is rebuilt per-user so that per-user OAuth services that
+    are already connected for this caller are included in the tool list rather
+    than listed as "not yet connected." The global _system_prompt is used as a
+    fallback when no tool_manager is available. (UNSAFE_DECISIONS U9 fix.)
+    """
     ag = Agent(
         agent_id=user_id,
         flow=flow,
-        memory=_get_or_create_memory(user_id),
+        memory=_get_or_create_memory(user_id, session_id),
         llm=llm,
         tool_manager=tool_manager,
     )
     now = datetime.now().astimezone()
     date_line = f"Current date and time: {now.strftime('%A, %B %d, %Y %H:%M %Z')}"
-    ag.system_prompt = date_line + "\n\n" + _system_prompt if _system_prompt else date_line
+
+    if tool_manager:
+        # Merge shared tools (loaded at startup) with this user's connected
+        # per-user tools. The deferred list excludes services already connected.
+        user_tools: dict = dict(_available_tools)
+        user_connected = tool_manager._user_tools.get(user_id) or {}
+        for server_name, tools in user_connected.items():
+            # Pack per-user tools into the same {tool_name: spec} shape.
+            packed = {t["name"]: t for t in tools if t.get("name")}
+            user_tools[server_name] = packed
+
+        # Deferred = requires_auth services not yet in user_connected.
+        deferred = [
+            svc for svc in _list_deferred_services()
+            if svc["service"] not in user_connected
+        ]
+
+        base_system_prompt = (config.get("app.system_prompt") or "").strip()
+        tool_prompt = format_tools_for_system_prompt(user_tools, deferred=deferred)
+        prompt = base_system_prompt + "\n\n" + tool_prompt if base_system_prompt else tool_prompt
+    else:
+        prompt = _system_prompt or ""
+
+    ag.system_prompt = date_line + "\n\n" + prompt if prompt else date_line
     ag.available_tools = _available_tools
     return ag
 
@@ -106,9 +159,9 @@ tool_manager = (
 )
 if tool_manager is None:
     if not smithery_config.get("api_key"):
-        print("[ark] SMITHERY_API_KEY missing; MCP tool manager disabled")
+        logger.info("[ark] SMITHERY_API_KEY missing; MCP tool manager disabled")
     elif not mcp_config:
-        print("[ark] no mcp_servers configured; tool manager disabled")
+        logger.info("[ark] no mcp_servers configured; tool manager disabled")
 
 
 def format_tools_for_system_prompt(tools_by_server: dict, deferred: list[dict] | None = None) -> str:
@@ -195,6 +248,21 @@ def _list_deferred_services() -> list[dict]:
 async def startup():
     """Initialize MCP servers and build the agent's system prompt with available tools."""
     global _system_prompt, _available_tools
+
+    # Fail fast if essential config is missing rather than surfacing cryptic
+    # None errors mid-request.
+    config.validate_required(["database.url", "llm.base_url", "llm.model_name"])
+
+    # Refuse to boot with a forgeable default JWT secret outside demo mode.
+    assert_secure_secret()
+    from base_module.jwt_utils import _demo_mode
+
+    if _demo_mode():
+        logger.warning(
+            "[ark] ARK_DEMO_MODE is ON -- unauthenticated X-User-ID impersonation is allowed. "
+            "NEVER enable in a shared/public deployment (UNSAFE_DECISIONS U2)."
+        )
+
     base_system_prompt = (config.get("app.system_prompt") or "").strip()
 
     if tool_manager:
@@ -207,14 +275,14 @@ async def startup():
         shared_servers = [s for s, tools in _available_tools.items() if tools]
         deferred = _list_deferred_services()
 
-        print(
-            f"[ark] MCP init: {len(shared_servers)} shared server(s) connected "
-            f"({shared_tools} tool(s)); {len(deferred)} per-user service(s) deferred"
+        logger.info(
+            "[ark] MCP init: %d shared server(s) connected (%d tool(s)); %d per-user service(s) deferred",
+            len(shared_servers), shared_tools, len(deferred),
         )
         if shared_servers:
-            print(f"[ark]   shared: {', '.join(shared_servers)}")
+            logger.info("[ark]   shared: %s", ", ".join(shared_servers))
         if deferred:
-            print(f"[ark]   deferred (needs user OAuth): {', '.join(s['service'] for s in deferred)}")
+            logger.info("[ark]   deferred (needs user OAuth): %s", ", ".join(s["service"] for s in deferred))
 
         tool_prompt = format_tools_for_system_prompt(_available_tools, deferred=deferred)
         _system_prompt = base_system_prompt + "\n\n" + tool_prompt if base_system_prompt else tool_prompt
@@ -227,19 +295,19 @@ async def startup():
 
         resumed = await sweep_orphans()
         if resumed:
-            print(f"[ark] resumed {resumed} orphan task(s) after restart")
+            logger.info("[ark] resumed %d orphan task(s) after restart", resumed)
     except Exception as e:
-        print(f"[ark] task orphan sweep failed: {e}")
+        logger.warning("[ark] task orphan sweep failed: %s", e)
 
 
 @app.get("/services")
-async def list_services(request: Request):
+async def list_services(current: dict = CurrentUser):
     """
     Returns the connection state of every per-user (requires_auth) service
     for the calling user, plus every no-auth shared service. The frontend
     uses this to render a connections panel with Smithery setup links.
     """
-    user_id = request.headers.get("X-User-ID") or config.get("memory.fallback_user_id")
+    user_id = current["user_id"]
 
     if not tool_manager:
         return JSONResponse(content={"user_id": user_id, "shared": [], "per_user": []})
@@ -260,17 +328,13 @@ async def list_services(request: Request):
     return JSONResponse(content={"user_id": user_id, "shared": shared, "per_user": per_user})
 
 
-async def _refresh_system_prompt() -> None:
-    """Rebuild _system_prompt from the current tool_manager state.
-    Called after a connection change so buddy picks up the new tools."""
-    global _system_prompt, _available_tools
-    if not tool_manager:
-        return
-    _available_tools = await tool_manager.list_all_tools()
-    deferred = _list_deferred_services()
-    tool_prompt = format_tools_for_system_prompt(_available_tools, deferred=deferred)
-    base = (config.get("app.system_prompt") or "").strip()
-    _system_prompt = base + "\n\n" + tool_prompt if base else tool_prompt
+# NOTE: there is intentionally no per-request system-prompt rebuild. The prompt is
+# assembled per-user in _make_agent() from the live tool_manager state (shared
+# tools loaded once at startup + this caller's connected per-user tools). The old
+# _refresh_system_prompt() mutated the module globals _system_prompt/_available_tools
+# on every chat/connect call, which was a cross-user race (one request's snapshot
+# could be read by another) and redundant work. _available_tools is now written once
+# at startup and treated as read-only shared state.
 
 
 def _callback_return_url(request: Request, service: str, user_id: str) -> str:
@@ -290,7 +354,7 @@ def _callback_return_url(request: Request, service: str, user_id: str) -> str:
 
 
 @app.post("/services/{service}/connect")
-async def connect_service(service: str, request: Request):
+async def connect_service(service: str, request: Request, current: dict = CurrentUser):
     """
     Trigger (or re-trigger) the per-user Smithery OAuth flow for a given
     service. Returns the setup_url if Smithery needs the user to authorize,
@@ -300,7 +364,7 @@ async def connect_service(service: str, request: Request):
     in pointing at /oauth/callback/{service}, so when the user finishes
     OAuth on Smithery's hosted page they get bounced back into the ark app.
     """
-    user_id = request.headers.get("X-User-ID") or config.get("memory.fallback_user_id")
+    user_id = current["user_id"]
 
     if not tool_manager:
         return JSONResponse(
@@ -337,28 +401,34 @@ async def connect_service(service: str, request: Request):
                 status_code=500,
             )
 
-    await _refresh_system_prompt()
+    # No global refresh: the next chat builds this user's prompt live in _make_agent.
     return JSONResponse(content={"service": service, "status": "connected"})
 
 
 @app.post("/services/{service}/disconnect")
-async def disconnect_service(service: str, request: Request):
-    """Forget a per-user connection client-side. Smithery retains the token
-    until the user revokes it there; we just stop tracking/surfacing it."""
-    user_id = request.headers.get("X-User-ID") or config.get("memory.fallback_user_id")
+async def disconnect_service(service: str, current: dict = CurrentUser):
+    """Remove a per-user service connection. Deletes the Smithery token so a
+    subsequent connect() starts a fresh OAuth flow (fixes REVOKED token state)."""
+    user_id = current["user_id"]
     if not tool_manager:
         return JSONResponse(content={"error": "tool manager disabled"}, status_code=503)
 
-    by_server = tool_manager._user_tools.get(user_id) or {}
-    by_server.pop(service, None)
-    tool_manager._pending.get(user_id, {}).pop(service, None)
-    # rebuild the tool registry without the disconnected service's tools
-    tool_manager._tool_registry = {
-        tname: sname
-        for tname, sname in tool_manager._tool_registry.items()
-        if sname != service or sname in tool_manager._shared_tools
-    }
-    await _refresh_system_prompt()
+    # Delete from Smithery first (clears the revoked/stale token server-side)
+    # then clear local caches. revoke_user_server is a no-op if not connected.
+    try:
+        await tool_manager.revoke_user_server(user_id, service)
+    except Exception as e:
+        logger.warning("revoke_user_server failed for %s/%s: %s", user_id, service, e)
+        # Fall back to in-memory-only clear so disconnect still works locally.
+        (tool_manager._user_tools.get(user_id) or {}).pop(service, None)
+        (tool_manager._pending.get(user_id) or {}).pop(service, None)
+        user_reg = tool_manager._user_tool_registry.get(user_id)
+        if user_reg:
+            tool_manager._user_tool_registry[user_id] = {
+                t: s for t, s in user_reg.items() if s != service
+            }
+
+    # No global refresh: the next chat builds this user's prompt live in _make_agent.
     return JSONResponse(content={"service": service, "status": "disconnected"})
 
 
@@ -372,6 +442,9 @@ async def oauth_callback(service: str, request: Request):
     """
     from fastapi.responses import HTMLResponse
 
+    # UNSAFE_DECISIONS U1: this is a third-party browser redirect from Smithery
+    # and cannot carry a Bearer token, so identity comes from the query param the
+    # setup_url was minted with. Known, accepted exception -- not CurrentUser.
     user_id = request.query_params.get("user_id") or config.get("memory.fallback_user_id")
     status = "connected"
     error_msg: str | None = None
@@ -385,20 +458,25 @@ async def oauth_callback(service: str, request: Request):
     else:
         import aiohttp
 
+        import asyncio as _asyncio
         async with aiohttp.ClientSession() as session:
-            try:
-                await tool_manager._ensure_user_server(session, user_id, service)
-            except AuthRequiredError as e:
-                # User bounced back but the connection isn't live yet. Leave
-                # the setup URL in place so they can retry.
-                status = "pending"
-                error_msg = e.message
-            except Exception as e:
-                status = "error"
-                error_msg = str(e)
-
-        if status == "connected":
-            await _refresh_system_prompt()
+            # Retry a couple of times: Smithery's token may not be ready the
+            # instant the OAuth redirect fires, so a single attempt can come
+            # back auth_required even though the user did complete the flow.
+            for attempt in range(3):
+                try:
+                    await tool_manager._ensure_user_server(session, user_id, service)
+                    break  # connected
+                except AuthRequiredError as e:
+                    if attempt < 2:
+                        await _asyncio.sleep(1.5)
+                        continue
+                    status = "pending"
+                    error_msg = e.message
+                except Exception as e:
+                    status = "error"
+                    error_msg = str(e)
+                    break
 
     import json as _json
 
@@ -436,30 +514,28 @@ async def oauth_callback(service: str, request: Request):
 @app.get("/health")
 async def health_check():
     """Health check endpoint to verify server and all dependencies."""
-    import requests
+    import psycopg2
+    import httpx
 
     services = {}
 
-    # Check SGLang (LLM inference)
-    try:
-        resp = requests.get("http://localhost:30000/v1/models", timeout=2)
-        services["sglang"] = "running" if resp.status_code == 200 else "error"
-    except Exception:
-        services["sglang"] = "not_running"
+    # Check SGLang and TEI with async HTTP so we don't block the event loop.
+    async with httpx.AsyncClient(timeout=2.0) as client:
+        for name, url in [("sglang", "http://localhost:30000/v1/models"),
+                          ("tei", "http://localhost:4444/health")]:
+            try:
+                resp = await client.get(url)
+                services[name] = "running" if resp.status_code == 200 else "error"
+            except Exception:
+                services[name] = "not_running"
 
-    # Check TEI (text embeddings)
+    # Check Postgres -- use try/finally to guarantee connection close.
     try:
-        resp = requests.get("http://localhost:4444/health", timeout=2)
-        services["tei"] = "running" if resp.status_code == 200 else "error"
-    except Exception:
-        services["tei"] = "not_running"
-
-    # Check Postgres
-    try:
-        import psycopg2
-
         conn = psycopg2.connect(config.get("database.url"), connect_timeout=2)
-        conn.close()
+        try:
+            conn.close()
+        finally:
+            pass
         services["postgres"] = "running"
     except Exception:
         services["postgres"] = "not_running"
@@ -475,7 +551,7 @@ async def health_check():
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: Request):
+async def chat_completions(request: Request, current: dict = CurrentUser):
     """OAI-compatible endpoint wrapping the full ArkOS agent."""
     payload = await request.json()
 
@@ -483,12 +559,17 @@ async def chat_completions(request: Request):
     model = payload.get("model", "ark-agent")
     stream = payload.get("stream", False)
 
-    # Extract user_id from header or body for per-user tool auth
-    user_id = request.headers.get("X-User-ID") or payload.get("user") or payload.get("user_id")
+    # Identity comes from the verified token (CurrentUser), never the body/header.
+    user_id = current["user_id"]
+
+    # Conversation isolation: the client sends a per-conversation session id so
+    # short-term memory is scoped to this chat, not bled across the user's other
+    # conversations. Absent header -> a fresh session (stateless single turn).
+    session_id = request.headers.get("X-Session-ID") or str(uuid.uuid4())
 
     # Lazily connect any per-user OAuth servers (e.g. Linear) that the user
     # has already authorized.  This populates tool_manager._user_tools so
-    # the system prompt includes their tools instead of a "please connect" stub.
+    # _make_agent's per-user prompt includes their tools instead of a "connect" stub.
     if tool_manager and user_id:
         import contextlib
 
@@ -504,10 +585,8 @@ async def chat_completions(request: Request):
                 # auth_required is expected if user hasn't connected yet
                 with contextlib.suppress(Exception):
                     await tool_manager._ensure_user_server(_sess, user_id, svc_name)
-        await _refresh_system_prompt()
 
-    effective_user_id = user_id or config.get("memory.fallback_user_id")
-    req_agent = _make_agent(effective_user_id)
+    req_agent = _make_agent(user_id, session_id)
 
     context_msgs = []
     context_msgs.append(SystemMessage(content=req_agent.system_prompt))
@@ -529,7 +608,16 @@ async def chat_completions(request: Request):
         async def generate_stream():
             """Yield SSE chunks in OpenAI streaming format."""
             chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-            async for chunk in req_agent.step_stream(context_msgs, user_id=effective_user_id):
+            async for chunk in req_agent.step_stream(context_msgs, user_id=user_id):
+                # step_stream yields {"type": "content"|"status", ...}.
+                # Status events carry buddy's current activity (thinking / drafting
+                # a plan) as a non-OpenAI `ark_status` field the ark frontend reads.
+                if isinstance(chunk, dict) and chunk.get("type") == "status":
+                    delta = {"ark_status": chunk["label"]}
+                elif isinstance(chunk, dict):
+                    delta = {"content": chunk.get("text", "")}
+                else:
+                    delta = {"content": chunk}  # defensive: legacy str chunk
                 data = {
                     "id": chunk_id,
                     "object": "chat.completion.chunk",
@@ -538,7 +626,7 @@ async def chat_completions(request: Request):
                     "choices": [
                         {
                             "index": 0,
-                            "delta": {"content": chunk},
+                            "delta": delta,
                             "finish_reason": None,
                         }
                     ],
@@ -568,7 +656,7 @@ async def chat_completions(request: Request):
         )
 
     # Non-streaming response
-    agent_response = await req_agent.step(context_msgs, user_id=effective_user_id)
+    agent_response = await req_agent.step(context_msgs, user_id=user_id)
     final_msg = agent_response or AIMessage(content="(no response)")
 
     completion = {

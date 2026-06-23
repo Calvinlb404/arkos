@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from openai import AuthenticationError, BadRequestError, InternalServerError, RateLimitError
 
 from model_module.ArkModelNew import (
     AIMessage,
@@ -12,6 +13,7 @@ from model_module.ArkModelNew import (
     ToolMessage,
     UserMessage,
 )
+from model_module.errors import ModelError
 
 
 class TestArkModelLinkInit:
@@ -163,32 +165,51 @@ class TestMakeLLMCall:
     @pytest.mark.asyncio
     async def test_stream_raises_not_implemented(self):
         model = ArkModelLink()
-
-        mock_client = MagicMock()
-        with patch.object(
-            ArkModelLink,
-            "client",
-            new_callable=lambda: property(lambda self: mock_client),
-        ):
-            result = await model.make_llm_call([UserMessage(content="hello")], json_schema=None, stream=True)
-            # Returns error string since exception is caught
-            assert "Error" in result
+        with pytest.raises(NotImplementedError):
+            await model.make_llm_call([UserMessage(content="hello")], json_schema=None, stream=True)
 
     @pytest.mark.asyncio
-    async def test_api_error_returns_error_string(self):
+    async def test_retryable_error_raises_model_error(self):
         model = ArkModelLink()
 
+        # Simulate a server error (retryable) from the API.
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.headers = {}
+        server_err = InternalServerError("server down", response=mock_response, body=None)
+
         mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(side_effect=Exception("Connection refused"))
+        mock_client.chat.completions.create = AsyncMock(side_effect=server_err)
 
         with patch.object(
             ArkModelLink,
             "client",
             new_callable=lambda: property(lambda self: mock_client),
         ):
-            result = await model.make_llm_call([UserMessage(content="hello")], json_schema=None)
-            assert "Error" in result
-            assert "Connection refused" in result
+            with pytest.raises(ModelError) as exc_info:
+                await model.make_llm_call([UserMessage(content="hello")], json_schema=None)
+            assert exc_info.value.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_terminal_error_raises_model_error(self):
+        model = ArkModelLink()
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.headers = {}
+        auth_err = AuthenticationError("bad key", response=mock_response, body=None)
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=auth_err)
+
+        with patch.object(
+            ArkModelLink,
+            "client",
+            new_callable=lambda: property(lambda self: mock_client),
+        ):
+            with pytest.raises(ModelError) as exc_info:
+                await model.make_llm_call([UserMessage(content="hello")], json_schema=None)
+            assert exc_info.value.retryable is False
 
 
 class TestGenerateResponse:
@@ -202,6 +223,41 @@ class TestGenerateResponse:
             result = await model.generate_response(msgs, json_schema=None)
             assert result == "generated text"
             mock_call.assert_called_once_with(msgs, json_schema=None)
+
+    @pytest.mark.asyncio
+    async def test_retries_transient_errors_then_raises(self):
+        model = ArkModelLink()
+        err = ModelError("timeout", retryable=True)
+
+        with patch.object(ArkModelLink, "make_llm_call", new_callable=AsyncMock) as mock_call:
+            mock_call.side_effect = err
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                with pytest.raises(ModelError):
+                    await model.generate_response([UserMessage(content="hi")], json_schema=None)
+            assert mock_call.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_does_not_retry_terminal_errors(self):
+        model = ArkModelLink()
+        err = ModelError("auth failed", retryable=False)
+
+        with patch.object(ArkModelLink, "make_llm_call", new_callable=AsyncMock) as mock_call:
+            mock_call.side_effect = err
+            with pytest.raises(ModelError):
+                await model.generate_response([UserMessage(content="hi")], json_schema=None)
+            assert mock_call.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_succeeds_on_retry_after_transient(self):
+        model = ArkModelLink()
+        err = ModelError("timeout", retryable=True)
+
+        with patch.object(ArkModelLink, "make_llm_call", new_callable=AsyncMock) as mock_call:
+            mock_call.side_effect = [err, "recovered response"]
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                result = await model.generate_response([UserMessage(content="hi")], json_schema=None)
+            assert result == "recovered response"
+            assert mock_call.call_count == 2
 
 
 class TestGenerateStream:
@@ -265,7 +321,7 @@ class TestGenerateStream:
             assert tokens == ["data"]
 
     @pytest.mark.asyncio
-    async def test_generate_stream_error_yields_error(self):
+    async def test_generate_stream_error_raises(self):
         model = ArkModelLink()
 
         mock_client = MagicMock()
@@ -276,8 +332,6 @@ class TestGenerateStream:
             "client",
             new_callable=lambda: property(lambda self: mock_client),
         ):
-            tokens = []
-            async for token in model.generate_stream([UserMessage(content="hi")]):
-                tokens.append(token)
-            assert len(tokens) == 1
-            assert "Error" in tokens[0]
+            with pytest.raises(Exception, match="stream failed"):
+                async for _ in model.generate_stream([UserMessage(content="hi")]):
+                    pass

@@ -87,8 +87,14 @@ async def _run_task_inner(task_id: str) -> None:
     payload = task["context_payload"] or {}
     if isinstance(payload, str):
         import json as _json
+        import logging as _logging
 
-        payload = _json.loads(payload)
+        try:
+            payload = _json.loads(payload)
+        except (ValueError, TypeError) as e:
+            _logging.getLogger(__name__).error("task %s has corrupted context_payload: %s", task_id, e)
+            log_event(task_id, "error", f"corrupted context_payload: {e}")
+            return
 
     plan_text = payload.get("plan") or ""
     plan_steps = payload.get("plan_steps") or []
@@ -130,6 +136,23 @@ async def _run_task_inner(task_id: str) -> None:
     )
 
     llm, shared_tm = _shared_deps()
+
+    # Ensure per-user OAuth tools are loaded before spawning the executor.
+    # chat_completions does this lazily, but the task runner bypasses that
+    # endpoint entirely — so if the server restarted or the user hasn't
+    # chatted recently, _user_tools is empty and the executor sees no tools.
+    if shared_tm:
+        import aiohttp as _aiohttp
+        import contextlib as _contextlib
+        async with _aiohttp.ClientSession() as _sess:
+            for svc_name, spec in (shared_tm.servers or {}).items():
+                if not spec.get("requires_auth"):
+                    continue
+                if svc_name in (shared_tm._user_tools.get(user_id) or {}):
+                    continue
+                with _contextlib.suppress(Exception):
+                    await shared_tm._ensure_user_server(_sess, user_id, svc_name)
+
     tool_manager = ScopedToolManager(shared_tm, allowed=required_tools) if shared_tm else None
 
     flow = StateHandler(

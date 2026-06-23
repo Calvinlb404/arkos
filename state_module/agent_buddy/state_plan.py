@@ -16,6 +16,7 @@ import json as _json
 from pydantic import BaseModel, Field
 
 from model_module.ArkModelNew import SystemMessage
+from model_module.llm_json import parse_llm_json
 from state_module.core.base_state import StateOutput
 from state_module.core.state import State
 from state_module.core.state_registry import register_state
@@ -49,10 +50,10 @@ class StatePlan(State):
         messages = context if isinstance(context, list) else context.get("messages", [])
 
         # The agent's root system prompt carries the live tool catalog. Without
-        # it, the LLM doesn't know what tools exist and ends up writing prose
-        # like "Opened https://example.com in the browser" instead of an
-        # imperative tool call. The executor can't act on prose, so it routes
-        # to ask_human and the task stalls in awaiting_approval.
+        # it, the LLM doesn't know what capabilities exist and ends up writing
+        # prose like "Opened https://example.com in the browser" instead of an
+        # actionable step. The executor can't act on past-tense prose, so it
+        # routes to ask_human and the task stalls in awaiting_approval.
         root_prompt = (getattr(agent, "system_prompt", None) or "").strip()
 
         plan_guidance = (
@@ -63,24 +64,29 @@ class StatePlan(State):
             "Hard rules for plan_steps:\n"
             "  - Each step is something buddy WILL DO, not something that has "
             "happened. Use imperative voice: 'Open ...', 'Send ...', 'Fetch ...', "
-            "'Use ... to ...'. NEVER write past tense like 'Opened ...' or 'Retrieved ...'.\n"
-            "  - Each step must name the SPECIFIC tool from the catalog above "
-            "that will execute it. Example: 'Use browser_task to open "
-            "https://example.com and return the page title.'\n"
+            "'Retrieve ...'. NEVER write past tense like 'Opened ...' or 'Retrieved ...'.\n"
+            "  - Describe WHAT to accomplish, not the exact internal tool/API/method "
+            "or parameters. The executor picks the specific tool and the names may "
+            "differ from what you expect.\n"
+            "    WRONG: \"Use the 'list_emails' tool to retrieve the inbox\"\n"
+            "    RIGHT: \"Retrieve the latest 5 emails from the inbox\"\n"
+            "  - For web/browser tasks you MAY reference the browser as the capability "
+            "(it is the only way to act on a URL), but still describe the action, not a "
+            "made-up function signature. RIGHT: \"Open https://example.com and return "
+            "the page title.\"\n"
             "  - Do NOT pre-describe the result. Don't write a step that says "
             "'Title of the page is X' — that's the outcome, not the action.\n"
-            "  - Do NOT split one tool call into multiple steps. One concrete "
-            "action = one step.\n"
+            "  - Do NOT split one action into multiple steps. One concrete action = one step.\n"
             "\n"
-            "Also set required_tools to the set of tool names referenced.\n"
+            "Set required_tools to the capabilities you expect (e.g. 'browser', 'email').\n"
             "\n"
             "If you truly lack information, set needs_clarification=true and include "
             "a single clarifying question. Otherwise provide 1 or more plan_steps.\n"
             "\n"
             "Example good plan for 'open example.com and tell me the title':\n"
             '  title: "Get example.com title"\n'
-            '  plan_steps: ["Use browser_task to open https://example.com and return the page title."]\n'
-            '  required_tools: ["browser_task"]\n'
+            '  plan_steps: ["Open https://example.com and return the page title."]\n'
+            '  required_tools: ["browser"]\n'
         )
         if root_prompt:
             system = SystemMessage(content=root_prompt + "\n\n" + plan_guidance)
@@ -96,20 +102,7 @@ class StatePlan(State):
         }
 
         output = await agent.call_llm(context=[system] + messages, json_schema=schema)
-        if not output or not output.content:
-            return StateOutput(
-                content="I couldn't draft a plan. Can you rephrase?",
-                completion_signal="needs_input",
-            )
-
-        try:
-            plan = WorkshopOutput.model_validate_json(output.content)
-        except Exception as e:
-            return StateOutput(
-                content=output.content,
-                completion_signal="needs_input",
-                error_detail=f"plan parse failed: {e}",
-            )
+        plan = parse_llm_json(output.content if output else None, WorkshopOutput)
 
         if plan.needs_clarification and plan.clarifying_question:
             return StateOutput(
@@ -169,8 +162,6 @@ class StatePlan(State):
                 structured_data={"route": "ask"},
             )
 
-        plan_text = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(plan.plan_steps))
-
         payload = {
             "kind": "plan_proposal",
             "title": plan.title,
@@ -179,11 +170,11 @@ class StatePlan(State):
         }
         sentinel = "```ark-plan\n" + _json.dumps(payload) + "\n```"
 
+        # One-line intro + the sentinel only. The title and steps live in the
+        # ark-plan payload and are drawn by the frontend plan card; emitting them
+        # as prose here too would render the plan twice in the chat.
         body = [
             "Here's the plan I put together. Approve it below to run it.",
-            "",
-            f"**{plan.title}**",
-            plan_text,
             "",
             sentinel,
         ]
