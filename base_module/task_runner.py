@@ -142,8 +142,10 @@ async def _run_task_inner(task_id: str) -> None:
     # endpoint entirely — so if the server restarted or the user hasn't
     # chatted recently, _user_tools is empty and the executor sees no tools.
     if shared_tm:
-        import aiohttp as _aiohttp
         import contextlib as _contextlib
+
+        import aiohttp as _aiohttp
+
         async with _aiohttp.ClientSession() as _sess:
             for svc_name, spec in (shared_tm.servers or {}).items():
                 if not spec.get("requires_auth"):
@@ -200,12 +202,22 @@ async def _run_task_inner(task_id: str) -> None:
     final_output = await subagent.step(kickoff, user_id=user_id)
 
     summary = ""
+    # Default to success only when the executor explicitly signalled it. A
+    # terminal FSM state alone does NOT mean the work succeeded -- the executor
+    # can reach executor_done after giving up (e.g. no usable tool), and marking
+    # that 'completed' is how unexecuted steps showed up green on the desk.
+    all_done = True
     if final_output:
         sd = getattr(final_output, "structured_data", {}) or {}
         summary = sd.get("summary") or final_output.content or ""
+        all_done = bool(sd.get("all_steps_done", final_output.completion_signal == "complete"))
 
-    mark_task_completed(task_id, summary=summary)
-    log_event(task_id, "completed", summary)
+    if all_done:
+        mark_task_completed(task_id, summary=summary)
+        log_event(task_id, "completed", summary)
+    else:
+        mark_task_failed(task_id, summary or "executor stopped before completing all plan steps")
+        log_event(task_id, "failed", summary)
 
 
 def spawn(task_id: str) -> asyncio.Task:

@@ -52,10 +52,16 @@ class StateExecutorDone(State):
             if task_id:
                 log_event(task_id, "error", f"summary LLM call failed: {e}")
 
+        # Deterministic success gate (architecture contract #2 -- no LLM here):
+        # step_idx only advances past a step on a non-error 'advance' decision, so
+        # reaching the end means every step genuinely ran. Stopping short means the
+        # executor gave up (e.g. no usable tool), which is a failure, not success.
+        all_steps_done = step_idx >= len(plan_steps)
+
         if not summary:
             summary = (
                 f"Finished all {len(plan_steps)} plan steps."
-                if step_idx >= len(plan_steps)
+                if all_steps_done
                 else f"Stopped at step {step_idx + 1} of {len(plan_steps)}."
             )
 
@@ -64,6 +70,6 @@ class StateExecutorDone(State):
 
         return StateOutput(
             content=summary,
-            completion_signal="complete",
-            structured_data={"summary": summary},
+            completion_signal="complete" if all_steps_done else "incomplete",
+            structured_data={"summary": summary, "all_steps_done": all_steps_done},
         )
