@@ -242,13 +242,41 @@ function SettingsModal({ data, onClose, onSignOut }) {
   const [authLink, setAuthLink] = useState({});     // service -> setup_url, shown if popup was blocked
   const pollRef = useRef(null);
 
+  // Slack DM notifications. `slackSaved` is the id currently linked on the
+  // backend (from /auth/me); `slackId` is the editable input value.
+  const [slackId, setSlackId] = useState("");
+  const [slackSaved, setSlackSaved] = useState(null);
+  const [slackBusy, setSlackBusy] = useState(false);
+  const [slackErr, setSlackErr] = useState("");
+
   async function refresh() {
     setServices(await api.services());
   }
   useEffect(() => {
     refresh();
+    // Prefill the Slack field with whatever id is already linked server-side.
+    (async () => {
+      const me = await api.me();
+      if (me && me.slack_user_id) { setSlackSaved(me.slack_user_id); setSlackId(me.slack_user_id); }
+    })();
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
+
+  // Mirror the backend's validation so a bad id is caught before the round trip.
+  const SLACK_RE = /^U[A-Z0-9]{8,}$/;
+  async function saveSlack() {
+    const v = slackId.trim();
+    if (!SLACK_RE.test(v)) { setSlackErr("member id looks like U012AB3CD"); return; }
+    setSlackErr(""); setSlackBusy(true);
+    try {
+      await api.slackConnect(v);
+      setSlackSaved(v);
+    } catch (e) {
+      setSlackErr("couldn't save — " + (e.message || e));
+    } finally {
+      setSlackBusy(false);
+    }
+  }
 
   function startPoll(service, popup) {
     if (pollRef.current) clearInterval(pollRef.current);
@@ -348,6 +376,29 @@ function SettingsModal({ data, onClose, onSignOut }) {
               </div>
             );
           })}
+        </section>
+
+        <section>
+          <span className="kicker">notifications</span>
+          <div className="soft" style={{ fontSize: 11, lineHeight: 1.7, marginBottom: 8 }}>
+            get a Slack DM when tasks start or finish. find your member id in your
+            Slack profile → ••• → copy member ID.
+          </div>
+          <div className="conn">
+            <span className="meta">
+              <Dot kind={slackSaved ? "live" : ""} /> <span className="nm">Slack DMs</span>
+            </span>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input value={slackId} placeholder="U012AB3CD" spellCheck={false}
+                onChange={(e) => setSlackId(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveSlack()}
+                style={{ fontFamily: "var(--mono)", fontSize: 11, width: 120 }} />
+              <button className="btn primary" disabled={slackBusy} onClick={saveSlack}>{slackBusy ? "…" : "save"}</button>
+            </span>
+          </div>
+          {slackErr
+            ? <div className="soft" style={{ fontSize: 11, color: "var(--bad, #c0392b)", paddingTop: 4 }}>{slackErr}</div>
+            : slackSaved && <div className="soft" style={{ fontSize: 11, paddingTop: 4 }}>linked to <b style={{ color: "var(--ink)" }}>{slackSaved}</b></div>}
         </section>
 
         <section>

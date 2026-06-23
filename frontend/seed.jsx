@@ -168,6 +168,18 @@ const api = {
     return j;
   },
 
+  // Link the calling user's Slack member ID for task-notification DMs.
+  // Backend returns 204 on success; throws on validation/other failure so the
+  // settings UI can surface why the save didn't take.
+  async slackConnect(slackUserId) {
+    const r = await fetch(CONFIG.backend + "/auth/slack-connect", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ slack_user_id: slackUserId }),
+    });
+    if (!r.ok) throw new Error("slack-connect failed: " + r.status);
+  },
+
   signOut() {
     CONFIG.token = ""; CONFIG.userId = ""; CONFIG.username = "";
     localStorage.removeItem("ark_token");
