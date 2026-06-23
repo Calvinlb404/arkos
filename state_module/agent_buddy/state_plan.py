@@ -78,7 +78,13 @@ class StatePlan(State):
             "'Title of the page is X' — that's the outcome, not the action.\n"
             "  - Do NOT split one action into multiple steps. One concrete action = one step.\n"
             "\n"
-            "Set required_tools to the capabilities you expect (e.g. 'browser', 'email').\n"
+            "Set required_tools to the EXACT tool names from the catalog above that "
+            "the executor will need -- this list scopes which tools it may call. For "
+            "web/browser actions that tool is 'browser_task'. If you are unsure of the "
+            "exact tool name for an external service, leave required_tools EMPTY: the "
+            "executor then keeps access to all your connected tools and picks the right "
+            "one itself. Never put a made-up capability word (like 'browser' or 'email') "
+            "here -- a name that matches no real tool locks the executor out of every tool.\n"
             "\n"
             "If you truly lack information, set needs_clarification=true and include "
             "a single clarifying question. Otherwise provide 1 or more plan_steps.\n"
@@ -86,7 +92,7 @@ class StatePlan(State):
             "Example good plan for 'open example.com and tell me the title':\n"
             '  title: "Get example.com title"\n'
             '  plan_steps: ["Open https://example.com and return the page title."]\n'
-            '  required_tools: ["browser"]\n'
+            '  required_tools: ["browser_task"]\n'
         )
         if root_prompt:
             system = SystemMessage(content=root_prompt + "\n\n" + plan_guidance)
