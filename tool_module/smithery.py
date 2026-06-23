@@ -230,7 +230,7 @@ class SmitheryClient:
                     if not parsed_ok:
                         raise SmitheryError(
                             f"jsonrpc {method}: could not parse response (not JSON or SSE): {text[:200]}"
-                        )
+                        ) from None
             if "error" in data:
                 err = data["error"] or {}
                 raise SmitheryError(f"{method} rpc error {err.get('code')}: {err.get('message')}")

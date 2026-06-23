@@ -456,9 +456,9 @@ async def oauth_callback(service: str, request: Request):
         status = "error"
         error_msg = f"unknown service '{service}'"
     else:
-        import aiohttp
-
         import asyncio as _asyncio
+
+        import aiohttp
         async with aiohttp.ClientSession() as session:
             # Retry a couple of times: Smithery's token may not be ready the
             # instant the OAuth redirect fires, so a single attempt can come
@@ -514,8 +514,8 @@ async def oauth_callback(service: str, request: Request):
 @app.get("/health")
 async def health_check():
     """Health check endpoint to verify server and all dependencies."""
-    import psycopg2
     import httpx
+    import psycopg2
 
     services = {}
 
