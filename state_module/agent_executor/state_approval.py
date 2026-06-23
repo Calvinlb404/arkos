@@ -26,6 +26,7 @@ from model_module.ArkModelNew import UserMessage
 from state_module.core.base_state import StateOutput
 from state_module.core.state import State
 from state_module.core.state_registry import register_state
+from tool_module.slack_notify import send_dm
 
 
 @register_state
@@ -89,6 +90,10 @@ class StateApproval(State):
             prompt=prompt,
             context={"plan_step_idx": getattr(agent, "step_idx", 0)},
         )
+
+        public_url = config.get("app.public_url") or "http://localhost:1113"
+        approval_url = f"{public_url}/app/"
+        await send_dm(user_id, f"Arkos needs your input:\n\n{prompt}\n\nApprove at: {approval_url}")
 
         set_task_status(task_id, "awaiting_approval")
         log_event(
