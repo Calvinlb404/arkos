@@ -352,6 +352,7 @@ function App() {
         </div>
       </div>
 
+      {authed && <BrowserPane />}
       {settings && <SettingsModal data={data} onClose={() => setSettings(false)} onSignOut={signOut} />}
       {!loginGone && !booting && <Login gone={authed} onEnter={enter} />}
     </React.Fragment>

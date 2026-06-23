@@ -202,6 +202,56 @@ function CompletedTaskCard({ item, onDismiss }) {
   );
 }
 
+/* ---- live browser screencast pane ----
+   One persistent EventSource per user to /v1/browser/stream. EventSource can't
+   send custom headers, so the user id rides as a query param (matches the
+   backend's _resolve_user_id fallback). Events: started | frame | ended.
+   On `ended` the pane lingers 2s so the final frame is visible, then hides. */
+function BrowserPane() {
+  const [live, setLive] = useState(false);
+  const [frame, setFrame] = useState("");
+  const hideTimer = useRef(null);
+
+  useEffect(() => {
+    if (!CONFIG.userId) return undefined;
+    const url = `${CONFIG.backend}/v1/browser/stream?user_id=${encodeURIComponent(CONFIG.userId)}`;
+    const es = new EventSource(url);
+
+    es.onmessage = (e) => {
+      let evt;
+      try { evt = JSON.parse(e.data); } catch { return; }
+      if (evt.type === "started") {
+        if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; }
+        setLive(true);
+        setFrame("");
+      } else if (evt.type === "frame" && evt.jpeg_b64) {
+        if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; }
+        setLive(true);
+        setFrame(`data:image/jpeg;base64,${evt.jpeg_b64}`);
+      } else if (evt.type === "ended") {
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        hideTimer.current = setTimeout(() => { setLive(false); setFrame(""); }, 2000);
+      }
+    };
+    // EventSource auto-reconnects on error; nothing to do here.
+
+    return () => {
+      try { es.close(); } catch { /* already closed */ }
+      if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; }
+    };
+  }, []);
+
+  return (
+    <div className={"browser-pane" + (live ? " live" : "")} aria-hidden={live ? "false" : "true"}>
+      <div className="browser-pane-header">
+        <span className="dot live" />
+        <span>buddy's browser</span>
+      </div>
+      {frame && <img src={frame} alt="" />}
+    </div>
+  );
+}
+
 /* ---- watch row ---- */
 function WatchRow({ item }) {
   return (
@@ -215,4 +265,4 @@ function WatchRow({ item }) {
   );
 }
 
-Object.assign(window, { Dot, Empty, ApprovalCard, PlanCard, TaskRow, WatchRow, CompletedTaskCard });
+Object.assign(window, { Dot, Empty, ApprovalCard, PlanCard, TaskRow, WatchRow, CompletedTaskCard, BrowserPane });
