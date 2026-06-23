@@ -7,7 +7,7 @@ and the DB-error fallback.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import psycopg2
 import pytest
@@ -20,6 +20,7 @@ from base_module.users import (
     DemoLoginRequest,
     LoginResponse,
     MeResponse,
+    SlackConnectRequest,
     router,
 )
 
@@ -87,6 +88,11 @@ class TestMeResponse:
         resp = MeResponse(user_id="u-1", username="alice")
         assert resp.user_id == "u-1"
         assert resp.username == "alice"
+        assert resp.slack_user_id is None
+
+    def test_slack_user_id_stored(self):
+        resp = MeResponse(user_id="u-1", username="alice", slack_user_id="U012AB3CD")
+        assert resp.slack_user_id == "U012AB3CD"
 
 
 # ---------------------------------------------------------------------------
@@ -139,15 +145,23 @@ class TestDemoLoginRoute:
 
 class TestMeRoute:
     def test_returns_user_from_bearer(self, client):
-        # Issue a real token rather than mocking the dependency, so we cover
-        # the JWT roundtrip in a single integration-ish unit test.
         from base_module.jwt_utils import issue_token
 
         token = issue_token("u-42", "alice")
-        resp = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+        with patch("base_module.users._get_slack_user_id", return_value=None):
+            resp = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
         body = resp.json()
-        assert body == {"user_id": "u-42", "username": "alice"}
+        assert body == {"user_id": "u-42", "username": "alice", "slack_user_id": None}
+
+    def test_returns_slack_user_id_when_linked(self, client):
+        from base_module.jwt_utils import issue_token
+
+        token = issue_token("u-42", "alice")
+        with patch("base_module.users._get_slack_user_id", return_value="U012AB3CD"):
+            resp = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200
+        assert resp.json()["slack_user_id"] == "U012AB3CD"
 
     def test_rejects_missing_token(self, client):
         resp = client.get("/auth/me")
@@ -155,4 +169,66 @@ class TestMeRoute:
 
     def test_rejects_invalid_token(self, client):
         resp = client.get("/auth/me", headers={"Authorization": "Bearer garbage"})
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# SlackConnectRequest schema
+# ---------------------------------------------------------------------------
+
+
+class TestSlackConnectRequest:
+    @pytest.mark.parametrize("uid", ["U012AB3CD", "UABCDEFGHI", "U1234567890"])
+    def test_accepts_valid_slack_ids(self, uid):
+        req = SlackConnectRequest(slack_user_id=uid)
+        assert req.slack_user_id == uid
+
+    @pytest.mark.parametrize("uid", ["u012ab3cd", "W012AB3CD", "U0123", "notanid", ""])
+    def test_rejects_invalid_slack_ids(self, uid):
+        with pytest.raises(ValueError):
+            SlackConnectRequest(slack_user_id=uid)
+
+
+# ---------------------------------------------------------------------------
+# /auth/slack-connect route
+# ---------------------------------------------------------------------------
+
+
+class TestSlackConnectRoute:
+    @pytest.fixture
+    def authed_client(self):
+        from base_module.jwt_utils import issue_token
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        client.headers = {"Authorization": f"Bearer {issue_token('u-1', 'alice')}"}
+        return client
+
+    def test_returns_204_on_success(self, authed_client):
+        conn = MagicMock()
+        cur = MagicMock()
+        cur.__enter__ = MagicMock(return_value=cur)
+        cur.__exit__ = MagicMock(return_value=False)
+        conn.cursor.return_value = cur
+        with patch("base_module.users._connect", return_value=conn):
+            resp = authed_client.post("/auth/slack-connect", json={"slack_user_id": "U012AB3CD"})
+        assert resp.status_code == 204
+        cur.execute.assert_called_once()
+        conn.commit.assert_called_once()
+
+    def test_rejects_bad_slack_id_format(self, authed_client):
+        resp = authed_client.post("/auth/slack-connect", json={"slack_user_id": "notanid"})
+        assert resp.status_code == 422
+
+    def test_db_error_returns_500(self, authed_client):
+        conn = MagicMock()
+        conn.cursor.side_effect = psycopg2.OperationalError("connection refused")
+        with patch("base_module.users._connect", return_value=conn):
+            resp = authed_client.post("/auth/slack-connect", json={"slack_user_id": "U012AB3CD"})
+        assert resp.status_code == 500
+        assert "db error" in resp.json()["detail"]
+
+    def test_requires_auth(self, client):
+        resp = client.post("/auth/slack-connect", json={"slack_user_id": "U012AB3CD"})
         assert resp.status_code == 401

@@ -132,6 +132,25 @@
     </section>
 
     <section>
+      <h3>notifications</h3>
+      <div style="font-size:11px;color:var(--fg-mute);margin-bottom:10px;">
+        get notified in Slack when tasks start or complete.<br>
+        find your member id: Slack profile &rarr; &middot;&middot;&middot; &rarr; copy member id
+      </div>
+      <div class="conn-row">
+        <div>
+          <span class="name">Slack DMs</span>
+          <span class="status" id="slackStatus">not set</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input id="slackUserIdInput" autocomplete="off" spellcheck="false" placeholder="U012AB3CD"
+            style="font-family:var(--mono);font-size:11px;background:transparent;border:1px solid var(--bg-line);color:var(--fg);padding:6px 10px;width:114px;" />
+          <button id="slackSaveBtn">save</button>
+        </div>
+      </div>
+    </section>
+
+    <section>
       <h3>account</h3>
       <div style="font-size:11px;color:var(--fg-mute);">
         signed in as <b id="settingsUser">—</b><br>
