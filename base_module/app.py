@@ -30,7 +30,7 @@ from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, Use
 from state_module.agent_buddy.routers import ROUTERS as BUDDY_ROUTERS
 from state_module.core.state_handler import StateHandler
 from tool_module.browser_tool import register_browser_tool
-from tool_module.smithery import AuthRequiredError
+from tool_module.smithery import AuthRequiredError, SmitheryError
 from tool_module.tool_call import MCPToolManager
 
 app = FastAPI(title="ArkOS Agent API", version="1.0.0")

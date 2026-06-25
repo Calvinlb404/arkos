@@ -160,7 +160,14 @@ class StateApproval(State):
                 structured_data={"route": "done", "declined": True},
             )
 
-        agent.step_idx = getattr(agent, "step_idx", 0) + 1
+        # Do NOT advance step_idx here. An approval is permission to act, not
+        # proof the action ran. Advancing on a bare 'yes' skips the step's
+        # actual tool call, so the step is marked done with no tool_result and
+        # the done-state summary correctly reports "Step N was not completed".
+        # Route back to the executor for the SAME step instead: the human answer
+        # is now in context, so the executor will run the approved tool (or
+        # advance legitimately off a real tool_result). step_idx only advances
+        # via action=advance in state_executor, which is gated on tool evidence.
         set_task_status(task_id, "running")
 
         return StateOutput(
