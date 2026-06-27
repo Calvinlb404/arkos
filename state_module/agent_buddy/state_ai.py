@@ -25,6 +25,7 @@ except ImportError:  # Python < 3.11 (test environments only)
 from pydantic import BaseModel, Field
 
 from model_module.ArkModelNew import SystemMessage
+from model_module.llm_json import parse_llm_json
 from state_module.core.base_state import StateOutput
 from state_module.core.state import State
 from state_module.core.state_registry import register_state
@@ -33,7 +34,8 @@ from state_module.core.state_registry import register_state
 class _Route(StrEnum):
     reply = "reply"  # stay in chat; answer in final
     ask = "ask"  # stay in chat; ask a clarifying question
-    plan = "plan"  # hand off to workshop_plan
+    plan = "plan"  # hand off to workshop_plan (multi-step approval flow)
+    computer = "computer"  # dispatch to the persistent computer (file/code/run tasks)
 
 
 class ReasonedOutput(BaseModel):
@@ -85,27 +87,37 @@ class StateAI(State):
         chat_guidance = (
             "You are buddy, the ark chat agent.\n"
             "Read the user's latest message and pick a route:\n"
-            "  - reply: answer them in chat. Use this for conversational turns.\n"
+            "  - reply: answer them in chat. This is the default for conversational turns.\n"
             "  - ask:   ask ONE clarifying question if the request is ambiguous.\n"
-            "  - plan:  the user has asked for a concrete action on an external system "
-            "where the target is specific. This covers BOTH multi-step orchestration "
-            "(create/send/schedule/update) AND single-step web/browser actions "
-            "(go to a URL, open a page, search for a specific query, fetch a page, "
-            "look up specific content online, use the browser to do X).\n"
+            "  - plan:  the user wants a concrete action on an EXTERNAL SERVICE where the "
+            "target is specific. This covers BOTH multi-step orchestration "
+            "(calendar, linear, slack: create/send/schedule/update) AND single-step "
+            "web/browser actions (go to a URL, open a page, search for a specific query, "
+            "fetch a page, look up specific content online, use the browser to do X). "
+            "These workshop a plan and need approval before acting.\n"
+            "  - computer: the user wants to write or run code, edit files, build "
+            "something, or do research that involves running commands -- any task that needs "
+            "a real computer (filesystem + shell). The computer agent handles it "
+            "autonomously and messages back when done.\n"
             "\n"
             "Examples that route to plan:\n"
             "  - 'open example.com and tell me the title' (specific URL + concrete action)\n"
             "  - 'use the browser to search for python tutorials on duckduckgo'\n"
             "  - 'go to https://news.ycombinator.com and summarize the top story'\n"
             "  - 'send a slack message to #eng saying the deploy is done'\n"
+            "Examples that route to computer:\n"
+            "  - 'write a script that renames these files'\n"
+            "  - 'build a small flask app and run it'\n"
             "Examples that route to ask:\n"
             "  - 'check my linear tickets' (no specific ticket or query)\n"
             "  - 'what's on my calendar' (no time range)\n"
             "\n"
-            "Bias toward plan whenever the user has named a specific URL, query, "
-            "recipient, or page. Do NOT downgrade a clear browser request to ask just "
-            "because the action is a single step — single-step browser tasks are still "
-            "plan.\n"
+            "Workshop ideas in chat FIRST. Do NOT jump to plan or computer just because the "
+            "user mentioned a system -- route there only when the target is specific. But do "
+            "NOT downgrade a clear browser request to ask just because the action is a single "
+            "step: single-step browser tasks with a named URL/query are still plan. Use "
+            "computer for genuine file/code/run work. If you truly cannot help, ask "
+            "(route=ask).\n"
             "\n"
             "Put your reasoning in `approach`. The user will NEVER see it. Only `final` "
             "is shown. Do not paraphrase your reasoning into the final message."
@@ -119,27 +131,15 @@ class StateAI(State):
         system = SystemMessage(content="\n\n".join(system_parts))
         output = await agent.call_llm(context=[system] + messages, json_schema=json_schema)
 
-        if not output or not output.content:
-            return StateOutput(
-                content="I had trouble forming a response. Could you rephrase?",
-                completion_signal="error",
-                error_detail="LLM returned empty content",
-                structured_data={"route": "ask"},
-            )
-
-        try:
-            data = ReasonedOutput.model_validate_json(output.content)
-        except Exception as e:
-            print(f"[state_ai] schema parse failed: {e}")
-            return StateOutput(
-                content=output.content,
-                completion_signal="complete",
-                structured_data={"route": "ask"},
-            )
+        # parse_llm_json repairs common model failures then validates;
+        # raises OutputValidationError (caught by _run_state for rerun/recovery).
+        data = parse_llm_json(output.content if output else None, ReasonedOutput)
 
         user_text = (data.final or "").strip() or "(no content)"
 
         signal = "needs_input" if data.route == _Route.ask else "complete"
+        if data.route == _Route.computer:
+            signal = "complete"
 
         return StateOutput(
             content=user_text,

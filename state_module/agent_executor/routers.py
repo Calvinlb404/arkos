@@ -16,16 +16,19 @@ def executor_router(output: StateOutput) -> str:
 
     Signals
     -------
-    tool   -> use_tool       (step can be handled by a tool call)
-    ask    -> ask_human      (step needs human input or approval)
-    done   -> executor_done  (no more plan steps)
-    <none> -> executor_done  (safe default)
+    tool     -> use_tool    (step calls a tool)
+    ask      -> ask_human   (step needs human input)
+    continue -> executor    (step advanced; loop back for next step)
+    done     -> executor_done  (no more plan steps)
+    <none>   -> executor_done  (safe default)
     """
     route = (output.structured_data or {}).get("route", "")
     if route == "tool":
         return "use_tool"
     if route == "ask":
         return "ask_human"
+    if route == "continue":
+        return "executor"
     return "executor_done"
 
 

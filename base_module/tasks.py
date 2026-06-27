@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 from base_module import task_runner
 from base_module.jwt_utils import CurrentUser
 from base_module.task_store import (
+    _user_uuid,
     list_events,
     list_pending_approvals,
     resolve_approval,
@@ -125,6 +126,20 @@ def _connect():
     return psycopg2.connect(config.get("database.url"))
 
 
+def _promote_to_running(task_id: str) -> None:
+    """Move a task from pending to running after spawn() succeeds."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE tasks SET status = 'running' WHERE task_id = %s",
+                (task_id,),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+
 def _row_to_response(row: dict[str, Any]) -> TaskResponse:
     payload = row["context_payload"] or {}
     if isinstance(payload, str):
@@ -145,12 +160,7 @@ def _row_to_response(row: dict[str, Any]) -> TaskResponse:
     )
 
 
-def _user_uuid(user_id_str: str) -> uuid.UUID:
-    """Parse the JWT sub (user_id) into a UUID. Demo fallback tolerates non-uuid strings by hashing."""
-    try:
-        return uuid.UUID(user_id_str)
-    except (ValueError, TypeError):
-        return uuid.uuid5(uuid.NAMESPACE_URL, f"ark-legacy:{user_id_str}")
+# _user_uuid now lives in base_module.task_store (shared user_id -> tasks DB boundary)
 
 
 # ---------- create + list + get -------------------------------------------
@@ -186,11 +196,13 @@ async def create_task(body: TaskCreate, current: dict = CurrentUser) -> TaskResp
     conn = _connect()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Insert as 'pending' so a failed spawn never leaves a stuck 'running' row.
+            # The row is promoted to 'running' only after spawn() succeeds below.
             cur.execute(
                 """
                 INSERT INTO tasks (user_id, status, required_tools, context_payload,
                                    session_id, agent_kind)
-                VALUES (%s, 'running', %s, %s, %s, 'executor')
+                VALUES (%s, 'pending', %s, %s, %s, 'executor')
                 RETURNING task_id, user_id, status, required_tools, context_payload,
                           session_id, agent_kind, created_at, updated_at
                 """,
@@ -203,17 +215,17 @@ async def create_task(body: TaskCreate, current: dict = CurrentUser) -> TaskResp
 
     resp = _row_to_response(row)
 
-    # Fire and forget: the runner will log events + update status in the DB.
     try:
         task_runner.spawn(resp.task_id)
     except Exception as e:
-        # If spawning fails, surface it but keep the row so the user can retry.
         from base_module.task_store import log_event, mark_task_failed
 
         log_event(resp.task_id, "error", f"spawn failed: {e}")
         mark_task_failed(resp.task_id, str(e))
         raise HTTPException(500, f"task row created but runner failed to start: {e}") from e
 
+    # Promote to 'running' now that spawn succeeded.
+    _promote_to_running(resp.task_id)
     return resp
 
 
@@ -227,6 +239,10 @@ async def list_tasks(
     conn = _connect()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Terminal statuses are bounded to the last 15 minutes so the list never
+            # grows unbounded. Live statuses (running, awaiting_approval, pending)
+            # are always returned in full.
+            _TERMINAL = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
             if status is None:
                 cur.execute(
                     """
@@ -234,10 +250,27 @@ async def list_tasks(
                            session_id, agent_kind, parent_task_id, created_at, updated_at
                     FROM tasks
                     WHERE user_id = %s
+                      AND (
+                        status NOT IN ('completed', 'failed', 'cancelled')
+                        OR updated_at >= now() - interval '15 minutes'
+                      )
                     ORDER BY created_at DESC
                     LIMIT 200
                     """,
                     (str(user_uuid),),
+                )
+            elif status in _TERMINAL:
+                cur.execute(
+                    """
+                    SELECT task_id, user_id, status, required_tools, context_payload,
+                           session_id, agent_kind, parent_task_id, created_at, updated_at
+                    FROM tasks
+                    WHERE user_id = %s AND status = %s
+                      AND updated_at >= now() - interval '15 minutes'
+                    ORDER BY created_at DESC
+                    LIMIT 200
+                    """,
+                    (str(user_uuid), status.value),
                 )
             else:
                 cur.execute(

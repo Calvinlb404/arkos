@@ -1,9 +1,23 @@
+import asyncio
+import logging
 from collections.abc import AsyncIterator
 from typing import Any, Optional
 
-# Import the asynchronous client
-from openai import AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AsyncOpenAI,
+    AuthenticationError,
+    BadRequestError,
+    InternalServerError,
+    PermissionDeniedError,
+    RateLimitError,
+)
 from pydantic import BaseModel, Field
+
+from model_module.errors import ModelError
+
+logger = logging.getLogger(__name__)
 
 
 # --- Custom Message Classes ---
@@ -111,13 +125,10 @@ class ArkModelLink(BaseModel):
                 print(msg)
                 raise ValueError("Unsupported Message Type ArkModel.py")
 
-        try:
-            if stream:
-                # The stream logic for an async generator is complex and omitted here
-                # but if implemented, it would use client.chat.completions.create(..., stream=True)
-                raise NotImplementedError("Asynchronous streaming not yet implemented.")
+        if stream:
+            raise NotImplementedError("Streaming not yet implemented; use generate_stream.")
 
-            # Use the asynchronous client and AWAIT the call
+        try:
             chat_completion = await self.client.chat.completions.create(
                 model=self.model_name,
                 messages=openai_messages_payload,
@@ -125,38 +136,55 @@ class ArkModelLink(BaseModel):
                 temperature=self.temperature,
                 response_format=json_schema,
             )
+            return chat_completion.choices[0].message.content
 
-            # The result is now available after the await
-            message_from_llm = chat_completion.choices[0].message.content
-
-            return message_from_llm
-
-        except Exception as e:
-            # Handle exceptions during the asynchronous API call
-            print(f"Error during async LLM call: {e}")
-            return f"Error: An error occurred during async LLM call: {e}"
+        except (APITimeoutError, APIConnectionError) as e:
+            raise ModelError(f"Model request timed out or connection failed: {e}", retryable=True, cause=e) from e
+        except RateLimitError as e:
+            raise ModelError(f"Rate limit hit: {e}", retryable=True, cause=e) from e
+        except InternalServerError as e:
+            raise ModelError(f"Model server error: {e}", retryable=True, cause=e) from e
+        except (BadRequestError, AuthenticationError, PermissionDeniedError) as e:
+            raise ModelError(f"Model request rejected: {e}", retryable=False, cause=e) from e
 
     async def generate_response(self, messages: list[Message], json_schema) -> str:
         """
-        ASYNCHRONOUSLY Generates a response from the model.
+        Generate a response, retrying up to 3 times on transient failures.
 
-        This method will be called by your async agent logic (e.g., Agent.call_llm).
-        Returns the raw content (which may be a JSON string if schema was used).
+        Raises ModelError on terminal failures (bad request, auth) and after
+        exhausting retries on transient failures (timeout, rate limit, 5xx).
+        Never returns an error string -- callers must handle ModelError.
 
         Args:
-            messages: The list of messages to send to the model.
+            messages: Conversation history to send.
+            json_schema: Optional structured output schema.
 
         Returns:
-            The raw response content (string).
+            Raw model response content as a string.
+
+        Raises:
+            ModelError: If the call fails terminally or retries are exhausted.
         """
+        delay = 1.0
+        last_error: ModelError | None = None
 
-        conversation_history = messages
+        for attempt in range(3):
+            try:
+                return await self.make_llm_call(messages, json_schema=json_schema)
+            except ModelError as e:
+                if not e.retryable:
+                    raise
+                last_error = e
+                logger.warning(
+                    "model call failed (attempt %d/3), retrying in %.1fs: %s",
+                    attempt + 1,
+                    delay,
+                    e,
+                )
+                await asyncio.sleep(delay)
+                delay *= 2
 
-        # *** AWAIT the asynchronous LLM call ***
-        response_content = await self.make_llm_call(conversation_history, json_schema=json_schema)
-
-        # The response is the string content (either regular text or a JSON string)
-        return response_content
+        raise last_error
 
     def _format_messages(self, messages: list[Message]) -> list[dict[str, str]]:
         """Convert Message objects to OpenAI format."""
@@ -184,5 +212,5 @@ class ArkModelLink(BaseModel):
                 if chunk.choices and chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
         except Exception as e:
-            print(f"Error during streaming: {e}")
-            yield f"Error: {e}"
+            logger.error("streaming failed: %s", e)
+            raise

@@ -34,8 +34,8 @@ class ScopedToolManager:
         return self._inner.clients
 
     # ---- listing -----------------------------------------------------------
-    async def list_all_tools(self) -> dict[str, dict[str, Any]]:
-        servers = await self._inner.list_all_tools()
+    async def list_all_tools(self, user_id: str | None = None) -> dict[str, dict[str, Any]]:
+        servers = await self._inner.list_all_tools(user_id)
         if not self._allowed:
             return servers
         out: dict[str, dict[str, Any]] = {}

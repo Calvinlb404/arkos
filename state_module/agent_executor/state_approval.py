@@ -26,6 +26,7 @@ from model_module.ArkModelNew import UserMessage
 from state_module.core.base_state import StateOutput
 from state_module.core.state import State
 from state_module.core.state_registry import register_state
+from tool_module.slack_notify import send_dm
 
 
 @register_state
@@ -89,6 +90,10 @@ class StateApproval(State):
             prompt=prompt,
             context={"plan_step_idx": getattr(agent, "step_idx", 0)},
         )
+
+        public_url = config.get("app.public_url") or "http://localhost:1113"
+        approval_url = f"{public_url}/app/"
+        await send_dm(user_id, f"Arkos needs your input:\n\n{prompt}\n\nApprove at: {approval_url}")
 
         set_task_status(task_id, "awaiting_approval")
         log_event(
@@ -155,7 +160,14 @@ class StateApproval(State):
                 structured_data={"route": "done", "declined": True},
             )
 
-        agent.step_idx = getattr(agent, "step_idx", 0) + 1
+        # Do NOT advance step_idx here. An approval is permission to act, not
+        # proof the action ran. Advancing on a bare 'yes' skips the step's
+        # actual tool call, so the step is marked done with no tool_result and
+        # the done-state summary correctly reports "Step N was not completed".
+        # Route back to the executor for the SAME step instead: the human answer
+        # is now in context, so the executor will run the approved tool (or
+        # advance legitimately off a real tool_result). step_idx only advances
+        # via action=advance in state_executor, which is gated on tool evidence.
         set_task_status(task_id, "running")
 
         return StateOutput(
