@@ -57,6 +57,7 @@ async def run_computer_task(
         while the sandbox/Memory keyspaces keep the raw sub.
         """
         from base_module.task_store import _user_uuid, create_approval, get_approval
+
         approval_id = create_approval(task_id, str(_user_uuid(user_id)), "text", prompt)
         emit({"kind": "ask", "prompt": prompt, "approval_id": approval_id})
         set_computer_status(task_id, "awaiting_approval")  # render as "waiting on you"
@@ -95,16 +96,22 @@ async def run_computer_task(
     # without its corresponding event (ISSUES.md Task 4).
     if status == "completed":
         update_task_status(
-            task_id, "completed",
-            summary=summary, outputs=outputs,
-            event_kind="completed", event_content=summary[:500],
+            task_id,
+            "completed",
+            summary=summary,
+            outputs=outputs,
+            event_kind="completed",
+            event_content=summary[:500],
             event_payload={"outputs": outputs},
         )
     else:
         update_task_status(
-            task_id, "failed",
-            error=summary, outputs=outputs,
-            event_kind="failed", event_content=summary[:500],
+            task_id,
+            "failed",
+            error=summary,
+            outputs=outputs,
+            event_kind="failed",
+            event_content=summary[:500],
             event_payload={"outputs": outputs},
         )
 
@@ -164,7 +171,9 @@ async def _inject_chat_message(
     except Exception as e:
         logger.error(
             "failed to inject completion message for user %s session %s: %s",
-            user_id, chat_session_id, e,
+            user_id,
+            chat_session_id,
+            e,
         )
 
 

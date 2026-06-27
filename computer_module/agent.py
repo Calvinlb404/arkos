@@ -69,14 +69,16 @@ class ComputerAgent:
             schemas = []
             for _server, tools in servers.items():
                 for tool_name, spec in tools.items():
-                    schemas.append({
-                        "type": "function",
-                        "function": {
-                            "name": f"mcp_{tool_name}",
-                            "description": spec.get("description", tool_name),
-                            "parameters": spec.get("inputSchema", {"type": "object", "properties": {}}),
-                        },
-                    })
+                    schemas.append(
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": f"mcp_{tool_name}",
+                                "description": spec.get("description", tool_name),
+                                "parameters": spec.get("inputSchema", {"type": "object", "properties": {}}),
+                            },
+                        }
+                    )
             return schemas
         except Exception as e:
             logger.warning("could not load MCP tools for user %s: %s", self.user_id, e)
@@ -103,7 +105,7 @@ class ComputerAgent:
                 "outputs": list[str] # file paths produced (from write_file/edit_file events)
             }
         """
-        sbx_handle = await self.sandbox.get_or_create(self.user_id)
+        await self.sandbox.get_or_create(self.user_id)
         cwd = "/home/user"
 
         # Build tool list: our sandbox tools + user's MCP tools.
@@ -157,18 +159,20 @@ class ComputerAgent:
             # Append the assistant turn and execute all tool calls.
             # Always include "content" key even if None -- omitting it causes a
             # 500 on SGLang when tool_calls are present (chat template requires it).
-            messages.append({
-                "role": "assistant",
-                "content": assistant_msg.content or None,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                    }
-                    for tc in assistant_msg.tool_calls
-                ],
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": assistant_msg.content or None,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        }
+                        for tc in assistant_msg.tool_calls
+                    ],
+                }
+            )
 
             tool_results = []
             for tc in assistant_msg.tool_calls:
@@ -186,15 +190,16 @@ class ComputerAgent:
                 else:
                     result = await dispatch(name, args, ctx)
 
-                if name in ("write_file", "edit_file") and "path" in args:
-                    if args["path"] not in outputs:
-                        outputs.append(args["path"])
+                if name in ("write_file", "edit_file") and "path" in args and args["path"] not in outputs:
+                    outputs.append(args["path"])
 
-                tool_results.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": str(result),
-                })
+                tool_results.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": str(result),
+                    }
+                )
 
             messages.extend(tool_results)
 
@@ -214,7 +219,7 @@ class ComputerAgent:
             self._emit_event({"kind": "ask", "prompt": prompt})
             result = await asyncio.wait_for(self._ask(prompt), timeout=86400)
             return str(result) if result is not None else "(no answer)"
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return "(ask timed out -- proceeding without user input)"
         except Exception as e:
             return f"(ask failed: {e})"

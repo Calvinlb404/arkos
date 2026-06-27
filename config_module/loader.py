@@ -140,9 +140,7 @@ class ConfigLoader:
         """
         missing = [k for k in required_keys if self.get(k) is None]
         if missing:
-            raise RuntimeError(
-                f"Missing required config keys (check config.yaml and .env): {missing}"
-            )
+            raise RuntimeError(f"Missing required config keys (check config.yaml and .env): {missing}")
 
     def reload(self) -> dict[str, Any]:
         """Force reload config from disk (useful for testing)."""

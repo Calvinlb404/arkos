@@ -82,8 +82,10 @@ class StateTool(State):
 
         # Args schema is dynamic — repair then parse; fall back to {} on failure.
         import json as _json
+
         try:
             from json_repair import repair_json  # type: ignore[import]
+
             raw_args = repair_json(args_output.content or "{}", return_objects=False)
         except Exception:
             raw_args = args_output.content or "{}"

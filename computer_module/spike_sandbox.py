@@ -31,7 +31,7 @@ if not os.environ.get("E2B_API_KEY"):
         "  2. Add to arkos/.env:  E2B_API_KEY=e2b_...\n"
     )
 
-from e2b_code_interpreter import Sandbox
+from e2b_code_interpreter import Sandbox  # noqa: E402
 
 WORK = "/home/user/work"
 FILE = f"{WORK}/hello.txt"
@@ -90,8 +90,8 @@ def main() -> None:
     print("  killed.")
 
     banner("SPIKE RESULT")
-    print(f"  command execution : OK")
-    print(f"  file write/read   : OK")
+    print("  command execution : OK")
+    print("  file write/read   : OK")
     print(f"  persistence       : {'PASS' if persisted else 'FAIL'}")
     print(f"  create latency    : {create_latency:.2f}s")
     print(f"  resume latency    : {resume_latency:.2f}s")

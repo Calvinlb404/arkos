@@ -162,9 +162,7 @@ def set_task_status(task_id: str, status: str) -> None:
         conn.close()
 
 
-def mark_task_completed(
-    task_id: str, summary: str | None = None, outputs: list[str] | None = None
-) -> None:
+def mark_task_completed(task_id: str, summary: str | None = None, outputs: list[str] | None = None) -> None:
     """Mark completed; write summary (and optional output paths, for computer
     tasks) into context_payload."""
     conn = _connect()

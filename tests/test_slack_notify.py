@@ -8,12 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from unittest.mock import AsyncMock, MagicMock, call, patch
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from tool_module.slack_notify import _get_slack_user_id, send_dm
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -83,29 +80,35 @@ class TestGetSlackUserId:
 
 class TestSendDm:
     def test_noop_when_user_has_no_slack_id(self):
-        with patch("tool_module.slack_notify._get_slack_user_id", return_value=None):
-            with patch("tool_module.slack_notify.aiohttp.ClientSession") as mock_cls:
-                asyncio.run(send_dm("user-1", "hello"))
-                mock_cls.assert_not_called()
+        with (
+            patch("tool_module.slack_notify._get_slack_user_id", return_value=None),
+            patch("tool_module.slack_notify.aiohttp.ClientSession") as mock_cls,
+        ):
+            asyncio.run(send_dm("user-1", "hello"))
+            mock_cls.assert_not_called()
 
     def test_noop_when_bot_token_not_configured(self):
-        with patch("tool_module.slack_notify._get_slack_user_id", return_value="U012AB3CD"):
-            with patch("tool_module.slack_notify.config") as mock_cfg:
-                mock_cfg.get.return_value = None
-                with patch("tool_module.slack_notify.aiohttp.ClientSession") as mock_cls:
-                    asyncio.run(send_dm("user-1", "hello"))
-                    mock_cls.assert_not_called()
+        with (
+            patch("tool_module.slack_notify._get_slack_user_id", return_value="U012AB3CD"),
+            patch("tool_module.slack_notify.config") as mock_cfg,
+            patch("tool_module.slack_notify.aiohttp.ClientSession") as mock_cls,
+        ):
+            mock_cfg.get.return_value = None
+            asyncio.run(send_dm("user-1", "hello"))
+            mock_cls.assert_not_called()
 
     def test_sends_dm_calls_both_slack_endpoints(self):
         open_resp = _make_response({"ok": True, "channel": {"id": "DM123"}})
         post_resp = _make_response({"ok": True})
         session = _make_session(open_resp, post_resp)
 
-        with patch("tool_module.slack_notify._get_slack_user_id", return_value="U012AB3CD"):
-            with patch("tool_module.slack_notify.config") as mock_cfg:
-                mock_cfg.get.return_value = "xoxb-test-token"
-                with patch("tool_module.slack_notify.aiohttp.ClientSession", return_value=session):
-                    asyncio.run(send_dm("user-1", "task done"))
+        with (
+            patch("tool_module.slack_notify._get_slack_user_id", return_value="U012AB3CD"),
+            patch("tool_module.slack_notify.config") as mock_cfg,
+            patch("tool_module.slack_notify.aiohttp.ClientSession", return_value=session),
+        ):
+            mock_cfg.get.return_value = "xoxb-test-token"
+            asyncio.run(send_dm("user-1", "task done"))
 
         assert session.post.call_count == 2
         urls = [c.args[0] for c in session.post.call_args_list]
@@ -116,12 +119,14 @@ class TestSendDm:
         open_resp = _make_response({"ok": False, "error": "not_in_channel"})
         session = _make_session(open_resp)
 
-        with patch("tool_module.slack_notify._get_slack_user_id", return_value="U012AB3CD"):
-            with patch("tool_module.slack_notify.config") as mock_cfg:
-                mock_cfg.get.return_value = "xoxb-test-token"
-                with patch("tool_module.slack_notify.aiohttp.ClientSession", return_value=session):
-                    with caplog.at_level(logging.WARNING, logger="tool_module.slack_notify"):
-                        asyncio.run(send_dm("user-1", "hello"))
+        with (
+            patch("tool_module.slack_notify._get_slack_user_id", return_value="U012AB3CD"),
+            patch("tool_module.slack_notify.config") as mock_cfg,
+            patch("tool_module.slack_notify.aiohttp.ClientSession", return_value=session),
+            caplog.at_level(logging.WARNING, logger="tool_module.slack_notify"),
+        ):
+            mock_cfg.get.return_value = "xoxb-test-token"
+            asyncio.run(send_dm("user-1", "hello"))
 
         assert session.post.call_count == 1  # chat.postMessage was never called
         assert "conversations.open failed" in caplog.text
@@ -131,11 +136,13 @@ class TestSendDm:
         post_resp = _make_response({"ok": False, "error": "channel_not_found"})
         session = _make_session(open_resp, post_resp)
 
-        with patch("tool_module.slack_notify._get_slack_user_id", return_value="U012AB3CD"):
-            with patch("tool_module.slack_notify.config") as mock_cfg:
-                mock_cfg.get.return_value = "xoxb-test-token"
-                with patch("tool_module.slack_notify.aiohttp.ClientSession", return_value=session):
-                    with caplog.at_level(logging.WARNING, logger="tool_module.slack_notify"):
-                        asyncio.run(send_dm("user-1", "hello"))
+        with (
+            patch("tool_module.slack_notify._get_slack_user_id", return_value="U012AB3CD"),
+            patch("tool_module.slack_notify.config") as mock_cfg,
+            patch("tool_module.slack_notify.aiohttp.ClientSession", return_value=session),
+            caplog.at_level(logging.WARNING, logger="tool_module.slack_notify"),
+        ):
+            mock_cfg.get.return_value = "xoxb-test-token"
+            asyncio.run(send_dm("user-1", "hello"))
 
         assert "chat.postMessage failed" in caplog.text

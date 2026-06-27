@@ -32,9 +32,9 @@ from state_module.core.state_registry import register_state
 
 
 class _Route(StrEnum):
-    reply = "reply"        # stay in chat; answer in final
-    ask = "ask"            # stay in chat; ask a clarifying question
-    plan = "plan"          # hand off to workshop_plan (multi-step approval flow)
+    reply = "reply"  # stay in chat; answer in final
+    ask = "ask"  # stay in chat; ask a clarifying question
+    plan = "plan"  # hand off to workshop_plan (multi-step approval flow)
     computer = "computer"  # dispatch to the persistent computer (file/code/run tasks)
 
 

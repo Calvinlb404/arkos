@@ -192,10 +192,7 @@ class SandboxManager:
             t = getattr(entry, "type", None)
             return getattr(t, "value", str(t)).lower() == "dir"
 
-        return [
-            {"name": e.name, "path": e.path, "is_dir": _is_dir(e), "size": getattr(e, "size", 0)}
-            for e in entries
-        ]
+        return [{"name": e.name, "path": e.path, "is_dir": _is_dir(e), "size": getattr(e, "size", 0)} for e in entries]
 
     async def pause(self, user_id: str) -> None:
         """Hibernate the sandbox (persist state, stop compute cost)."""

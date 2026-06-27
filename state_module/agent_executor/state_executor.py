@@ -21,11 +21,16 @@ from state_module.core.base_state import StateOutput
 from state_module.core.state import State
 from state_module.core.state_registry import register_state
 
-
 _TOOL_ERROR_SIGNALS = (
-    '"ok": false', '"ok":false',
-    "mcp error", '"error":', "channel_not_found", "not_found",
-    "invalid_type", "unrecognized_keys", "validation error",
+    '"ok": false',
+    '"ok":false',
+    "mcp error",
+    '"error":',
+    "channel_not_found",
+    "not_found",
+    "invalid_type",
+    "unrecognized_keys",
+    "validation error",
     "input validation error",
 )
 
@@ -50,7 +55,7 @@ def _last_tool_was_error(context: list) -> bool:
 class _ActionKind(StrEnum):
     tool = "tool"
     ask = "ask"
-    advance = "advance"   # step is complete; move to the next one
+    advance = "advance"  # step is complete; move to the next one
 
 
 class _AskKind(StrEnum):
@@ -109,7 +114,7 @@ class StateExecutor(State):
 
         tool_lines: list[str] = []
         tool_names: list[str] = []
-        tool_specs: dict[str, dict] = {}   # tool_name -> full spec (for arg schema)
+        tool_specs: dict[str, dict] = {}  # tool_name -> full spec (for arg schema)
         if agent.tool_manager is not None:
             try:
                 servers = await agent.tool_manager.list_all_tools(agent.current_user_id)
@@ -118,7 +123,7 @@ class StateExecutor(State):
                         tool_names.append(tname)
                         spec = tspec if isinstance(tspec, dict) else {}
                         tool_specs[tname] = spec
-                        desc = (spec.get("description") or getattr(tspec, "description", "") or "")
+                        desc = spec.get("description") or getattr(tspec, "description", "") or ""
                         desc_short = desc.strip().splitlines()[0][:120] if desc.strip() else ""
 
                         # Include required + optional param names so the model
@@ -218,9 +223,13 @@ class StateExecutor(State):
         raw_decision = parse_llm_json(output.content if output else None, ConstrainedDecision)
         # Normalise to base ExecutorDecision so the rest of the code is type-stable.
         decision = ExecutorDecision(
-            action=_ActionKind(raw_decision.action.value if hasattr(raw_decision.action, 'value') else raw_decision.action),
+            action=_ActionKind(
+                raw_decision.action.value if hasattr(raw_decision.action, "value") else raw_decision.action
+            ),
             reason=raw_decision.reason,
-            tool_name=raw_decision.tool_name.value if raw_decision.tool_name and hasattr(raw_decision.tool_name, 'value') else raw_decision.tool_name,
+            tool_name=raw_decision.tool_name.value
+            if raw_decision.tool_name and hasattr(raw_decision.tool_name, "value")
+            else raw_decision.tool_name,
             ask_kind=raw_decision.ask_kind,
             ask_prompt=raw_decision.ask_prompt,
         )
@@ -241,9 +250,12 @@ class StateExecutor(State):
             # retry instead.
             if _last_tool_was_error(context):
                 if task_id:
-                    log_event(task_id, "advance_blocked",
-                              "blocked advance: last tool result was an error",
-                              payload={"step_idx": step_idx})
+                    log_event(
+                        task_id,
+                        "advance_blocked",
+                        "blocked advance: last tool result was an error",
+                        payload={"step_idx": step_idx},
+                    )
                 agent.pending_ask = {
                     "kind": "text",
                     "prompt": (
@@ -309,12 +321,12 @@ class StateExecutor(State):
                     "json_schema": {"name": "tool_args", "schema": input_schema},
                 }
                 try:
-                    args_output = await agent.call_llm(
-                        context=[args_system] + list(context), json_schema=args_schema
-                    )
+                    args_output = await agent.call_llm(context=[args_system] + list(context), json_schema=args_schema)
                     import json as _json
+
                     try:
                         from json_repair import repair_json
+
                         raw = repair_json(args_output.content or "{}", return_objects=False)
                     except Exception:
                         raw = args_output.content or "{}"

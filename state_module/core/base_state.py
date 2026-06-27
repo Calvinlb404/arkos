@@ -1,10 +1,10 @@
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
-class TerminalReason(str, Enum):
+class TerminalReason(StrEnum):
     """
     Why the agent loop stopped.
 

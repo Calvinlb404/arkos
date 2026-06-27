@@ -4,7 +4,6 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Callable
 from enum import Enum
 from typing import Any
 
@@ -12,12 +11,11 @@ from pydantic import BaseModel, Field, ValidationError, create_model
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from memory_module.memory import Memory
-from model_module.errors import ModelError
-from state_module.core.base_state import TerminalReason
 
 # Assuming ArkModelLink.generate_response is actually ArkModelLink.agenerate_response
 from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage
-from state_module.core.base_state import StateOutput
+from model_module.errors import ModelError
+from state_module.core.base_state import StateOutput, TerminalReason
 from state_module.core.state_handler import StateHandler
 
 logger = logging.getLogger(__name__)
@@ -34,6 +32,7 @@ _TIKTOKEN_FUDGE = 1.15
 
 try:
     import tiktoken as _tiktoken
+
     _ENCODER = _tiktoken.get_encoding("cl100k_base")
 except Exception:
     _ENCODER = None
@@ -287,6 +286,7 @@ class Agent:
         characters as tokens here is conservative enough.
         """
         from config_module.loader import config as _cfg
+
         context_window: int = _cfg.get("llm.context_window") or _cfg.get("llm.max_tokens") or 8192
         output_reserve: int = _cfg.get("llm.max_tokens") or 0
         # If context_window was not explicitly set, treat max_tokens as the full
@@ -461,9 +461,7 @@ class Agent:
         }
 
         def _status_for(state):
-            return (_STATUS.get(getattr(state, "type", ""))
-                    or _STATUS.get(getattr(state, "name", ""))
-                    or "working")
+            return _STATUS.get(getattr(state, "type", "")) or _STATUS.get(getattr(state, "name", "")) or "working"
 
         while True:
             if retry_count > self.max_iter:

@@ -618,6 +618,7 @@ class SmitheryManager:
         """
         connection_id = self._user_conn_id(user_id, server_name)
         import aiohttp as _aiohttp
+
         async with _aiohttp.ClientSession() as session:
             await self.client.delete_connection(session, connection_id)
 
@@ -626,9 +627,7 @@ class SmitheryManager:
         (self._pending.get(user_id) or {}).pop(server_name, None)
         user_reg = self._user_tool_registry.get(user_id)
         if user_reg:
-            self._user_tool_registry[user_id] = {
-                t: s for t, s in user_reg.items() if s != server_name
-            }
+            self._user_tool_registry[user_id] = {t: s for t, s in user_reg.items() if s != server_name}
 
     async def shutdown(self) -> None:
         """No persistent sessions to close (each call opens its own ClientSession)."""

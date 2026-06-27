@@ -57,10 +57,11 @@ def _project(row: dict[str, Any]) -> dict[str, Any]:
 
 # ---------- computer tasks (agent_kind='computer' rows in `tasks`) -----------
 
+
 def create_computer_task(user_id: str, chat_session_id: str, prompt: str) -> str:
     """Insert a computer task row (status=pending) and return the task_id."""
     payload = {
-        "title": prompt[:90],          # header for the unified list + approvals panel
+        "title": prompt[:90],  # header for the unified list + approvals panel
         "prompt": prompt,
         "chat_session_id": chat_session_id,
         "source": "computer",
@@ -149,6 +150,7 @@ def list_computer_tasks(user_id: str, limit: int = 20) -> list[dict[str, Any]]:
 
 
 # ---------- events (shared task_events) --------------------------------------
+
 
 def log_computer_event(
     task_id: str,

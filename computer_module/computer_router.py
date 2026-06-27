@@ -13,7 +13,7 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -34,6 +34,7 @@ router = APIRouter(prefix="/computer", tags=["computer"])
 
 # ---------- task dispatch + listing -----------------------------------------
 
+
 class DispatchRequest(BaseModel):
     prompt: str
 
@@ -45,8 +46,8 @@ async def dispatch_task(body: DispatchRequest, current: dict = CurrentUser):
     Returns the task_id immediately; the task runs async and messages back on completion.
     """
     from computer_module.runner import spawn
-    from memory_module.memory import Memory
     from config_module.loader import config
+    from memory_module.memory import Memory
 
     # Normalise to UUID so conversation_context and tasks share the same key.
     user_id = str(_user_uuid(current["user_id"]))
@@ -54,16 +55,13 @@ async def dispatch_task(body: DispatchRequest, current: dict = CurrentUser):
     # Mint a fresh session_id so the completion message has somewhere to land.
     # When called from buddy, the session_id comes from the agent's memory.
     # When called directly (e.g. from a client), we create an ephemeral one.
-    mem = Memory(user_id=user_id, session_id=None,
-                 db_url=config.get("database.url"), use_long_term=False)
+    mem = Memory(user_id=user_id, session_id=None, db_url=config.get("database.url"), use_long_term=False)
     chat_session_id = mem.session_id
 
     task_id = create_computer_task(user_id, chat_session_id, body.prompt)
-    spawn(task_id=task_id, user_id=user_id,
-          chat_session_id=chat_session_id, prompt=body.prompt)
+    spawn(task_id=task_id, user_id=user_id, chat_session_id=chat_session_id, prompt=body.prompt)
 
-    return JSONResponse({"task_id": task_id, "status": "pending",
-                         "chat_session_id": chat_session_id})
+    return JSONResponse({"task_id": task_id, "status": "pending", "chat_session_id": chat_session_id})
 
 
 @router.get("/tasks")
@@ -98,6 +96,7 @@ def _serialize_task(row: dict) -> dict:
 
 # ---------- event polling (Task 8 fallback) ----------------------------------
 
+
 @router.get("/tasks/{task_id}/events")
 async def poll_events(task_id: str, after: int = 0, current: dict = CurrentUser):
     """
@@ -120,6 +119,7 @@ def _serialize_event(e: dict) -> dict:
 
 # ---------- SSE stream (Task 8) ---------------------------------------------
 
+
 @router.get("/tasks/{task_id}/stream")
 async def stream_events(task_id: str, current: dict = CurrentUser):
     """
@@ -138,9 +138,7 @@ async def stream_events(task_id: str, current: dict = CurrentUser):
         last_id = 0
         while True:
             try:
-                events = await asyncio.to_thread(
-                    list_computer_events, task_id, user_id, last_id
-                )
+                events = await asyncio.to_thread(list_computer_events, task_id, user_id, last_id)
             except Exception as e:
                 yield f"data: {json.dumps({'kind': 'error', 'content': str(e)})}\n\n"
                 return
@@ -161,12 +159,13 @@ async def stream_events(task_id: str, current: dict = CurrentUser):
 
             await asyncio.sleep(1)
 
-    return StreamingResponse(generate(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache",
-                                      "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 
 # ---------- filesystem viewer (Task 9) --------------------------------------
+
 
 @router.get("/files")
 async def list_files(path: str = "/home/user", current: dict = CurrentUser):
@@ -194,12 +193,14 @@ async def read_file(path: str, current: dict = CurrentUser):
     try:
         content = await sandbox_manager.read_file(user_id, path)
         truncated = len(content) > MAX_CHARS
-        return JSONResponse({
-            "path": path,
-            "content": content[:MAX_CHARS],
-            "truncated": truncated,
-            "size": len(content),
-        })
+        return JSONResponse(
+            {
+                "path": path,
+                "content": content[:MAX_CHARS],
+                "truncated": truncated,
+                "size": len(content),
+            }
+        )
     except Exception as e:
         logger.error("read_file failed for user %s path %s: %s", user_id, path, e)
         return JSONResponse({"error": str(e)}, status_code=500)

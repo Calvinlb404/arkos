@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from openai import AuthenticationError, BadRequestError, InternalServerError, RateLimitError
+from openai import AuthenticationError, InternalServerError
 
 from model_module.ArkModelNew import (
     AIMessage,
@@ -231,9 +231,8 @@ class TestGenerateResponse:
 
         with patch.object(ArkModelLink, "make_llm_call", new_callable=AsyncMock) as mock_call:
             mock_call.side_effect = err
-            with patch("asyncio.sleep", new_callable=AsyncMock):
-                with pytest.raises(ModelError):
-                    await model.generate_response([UserMessage(content="hi")], json_schema=None)
+            with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(ModelError):
+                await model.generate_response([UserMessage(content="hi")], json_schema=None)
             assert mock_call.call_count == 3
 
     @pytest.mark.asyncio
@@ -327,11 +326,13 @@ class TestGenerateStream:
         mock_client = MagicMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=Exception("stream failed"))
 
-        with patch.object(
-            ArkModelLink,
-            "client",
-            new_callable=lambda: property(lambda self: mock_client),
+        with (
+            patch.object(
+                ArkModelLink,
+                "client",
+                new_callable=lambda: property(lambda self: mock_client),
+            ),
+            pytest.raises(Exception, match="stream failed"),
         ):
-            with pytest.raises(Exception, match="stream failed"):
-                async for _ in model.generate_stream([UserMessage(content="hi")]):
-                    pass
+            async for _ in model.generate_stream([UserMessage(content="hi")]):
+                pass

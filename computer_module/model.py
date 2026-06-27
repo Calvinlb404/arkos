@@ -36,14 +36,8 @@ class ToolCallingModel:
     """
 
     def __init__(self) -> None:
-        self.base_url: str = (
-            config.get("computer_agent.llm.base_url") or config.get("llm.base_url") or ""
-        )
-        self.model: str = (
-            config.get("computer_agent.llm.model_name")
-            or config.get("llm.model_name")
-            or "tgi"
-        )
+        self.base_url: str = config.get("computer_agent.llm.base_url") or config.get("llm.base_url") or ""
+        self.model: str = config.get("computer_agent.llm.model_name") or config.get("llm.model_name") or "tgi"
         self.max_tokens: int = int(config.get("computer_agent.llm.max_tokens") or 4096)
         self.temperature: float = float(config.get("computer_agent.llm.temperature") or 0.7)
         self._api_key: str = config.get("computer_agent.llm.api_key") or "-"
@@ -52,9 +46,7 @@ class ToolCallingModel:
     def _client(self) -> AsyncOpenAI:
         return AsyncOpenAI(base_url=self.base_url, api_key=self._api_key)
 
-    async def call(
-        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> Any:
+    async def call(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Any:
         """
         One model turn. Returns the raw assistant message object from the SDK.
         .tool_calls is a list (possibly empty); .content is the final text when empty.
@@ -73,7 +65,8 @@ class ToolCallingModel:
                 extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
         except Exception as e:
-            from openai import InternalServerError, APIConnectionError, APITimeoutError, RateLimitError
+            from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
+
             retryable = isinstance(e, (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError))
             raise ModelError(
                 f"model call failed ({type(e).__name__}): {e}",

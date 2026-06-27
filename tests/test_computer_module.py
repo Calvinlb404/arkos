@@ -5,7 +5,6 @@ so they run without e2b or a live LLM.
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,10 +12,10 @@ import pytest
 from computer_module.prompt import build_system_prompt
 from computer_module.tools import ToolContext, _dispatch
 
-
 # ---------------------------------------------------------------------------
 # prompt
 # ---------------------------------------------------------------------------
+
 
 class TestBuildSystemPrompt:
     def test_includes_env_context(self):
@@ -43,14 +42,17 @@ class TestBuildSystemPrompt:
 # tools -- dispatch
 # ---------------------------------------------------------------------------
 
+
 def _make_ctx(user_id="u1") -> ToolContext:
     sbx = MagicMock()
     sbx.exec = AsyncMock(return_value={"stdout": "hi\n", "stderr": "", "exit_code": 0})
     sbx.read_file = AsyncMock(return_value="line1\nline2\nline3")
     sbx.write_file = AsyncMock()
-    sbx.list_dir = AsyncMock(return_value=[
-        {"name": "foo.py", "is_dir": False, "size": 10},
-    ])
+    sbx.list_dir = AsyncMock(
+        return_value=[
+            {"name": "foo.py", "is_dir": False, "size": 10},
+        ]
+    )
     return ToolContext(user_id=user_id, sandbox=sbx, emit=lambda e: None)
 
 
@@ -128,8 +130,9 @@ class TestDispatchEditFile:
         ctx = _make_ctx()
         ctx.read_files.add("/f.py")
         ctx.sandbox.read_file = AsyncMock(return_value="foo foo foo")
-        result = await _dispatch("edit_file",
-            {"path": "/f.py", "old_string": "foo", "new_string": "bar", "replace_all": True}, ctx)
+        result = await _dispatch(
+            "edit_file", {"path": "/f.py", "old_string": "foo", "new_string": "bar", "replace_all": True}, ctx
+        )
         written = ctx.sandbox.write_file.call_args[0][2]
         assert written == "bar bar bar"
         assert "Edited" in result
@@ -166,8 +169,7 @@ class TestDispatchGrep:
     @pytest.mark.asyncio
     async def test_calls_grep_command(self):
         ctx = _make_ctx()
-        ctx.sandbox.exec = AsyncMock(return_value={
-            "stdout": "/f.py:1: hello world", "stderr": "", "exit_code": 0})
+        ctx.sandbox.exec = AsyncMock(return_value={"stdout": "/f.py:1: hello world", "stderr": "", "exit_code": 0})
         result = await _dispatch("grep", {"pattern": "hello"}, ctx)
         assert "/f.py" in result
         cmd = ctx.sandbox.exec.call_args[0][1]
@@ -197,6 +199,7 @@ class TestDispatchErrorHandling:
     async def test_unknown_tool_returns_error_string(self):
         ctx = _make_ctx()
         from computer_module.tools import dispatch
+
         result = await dispatch("nonexistent_tool", {}, ctx)
         assert "ERROR" in result or "unknown" in result.lower()
 
@@ -205,6 +208,7 @@ class TestDispatchErrorHandling:
         ctx = _make_ctx()
         ctx.sandbox.exec = AsyncMock(side_effect=Exception("sandbox exploded"))
         from computer_module.tools import dispatch
+
         result = await dispatch("run_command", {"command": "echo hi"}, ctx)
         assert "ERROR" in result
 
@@ -227,8 +231,10 @@ class TestSandboxManagerRecovery:
         fresh = MagicMock(sandbox_id="fresh-sbx")
         mgr._create = MagicMock(return_value=fresh)
 
-        with patch("computer_module.sandbox._db_get_row", return_value=None), \
-             patch("computer_module.sandbox._db_upsert"):
+        with (
+            patch("computer_module.sandbox._db_get_row", return_value=None),
+            patch("computer_module.sandbox._db_upsert"),
+        ):
             sbx = await mgr.get_or_create("u1")
 
         assert sbx is fresh
@@ -255,8 +261,10 @@ class TestSandboxManagerRecovery:
 # agent -- loop behaviour
 # ---------------------------------------------------------------------------
 
+
 def _make_agent():
     from computer_module.agent import ComputerAgent
+
     sandbox = MagicMock()
     sandbox.get_or_create = AsyncMock(return_value=MagicMock(sandbox_id="sbx1"))
     sandbox.pause = AsyncMock()
@@ -299,6 +307,7 @@ class TestComputerAgentLoop:
     @pytest.mark.asyncio
     async def test_model_error_returns_failed(self):
         from model_module.errors import ModelError
+
         agent = _make_agent()
         agent.model = MagicMock()
         agent.model.call = AsyncMock(side_effect=ModelError("down", retryable=False))
@@ -314,9 +323,13 @@ class TestComputerAgentLoop:
         tc.id = "call_w"
         tc.function.name = "write_file"
         tc.function.arguments = '{"path":"/home/user/out.py","content":"x"}'
-        write_msg = MagicMock(); write_msg.tool_calls = [tc]; write_msg.content = None
+        write_msg = MagicMock()
+        write_msg.tool_calls = [tc]
+        write_msg.content = None
         # Step 1: finish
-        done_msg = MagicMock(); done_msg.tool_calls = []; done_msg.content = "Done."
+        done_msg = MagicMock()
+        done_msg.tool_calls = []
+        done_msg.content = "Done."
         agent.model = MagicMock()
         agent.model.call = AsyncMock(side_effect=[write_msg, done_msg])
         agent.sandbox.write_file = AsyncMock()
@@ -329,10 +342,15 @@ class TestComputerAgentLoop:
         events = []
         agent._emit = lambda e: events.append(e)
         tc = MagicMock()
-        tc.id = "c1"; tc.function.name = "run_command"
+        tc.id = "c1"
+        tc.function.name = "run_command"
         tc.function.arguments = '{"command":"echo hi"}'
-        tool_msg = MagicMock(); tool_msg.tool_calls = [tc]; tool_msg.content = None
-        done_msg = MagicMock(); done_msg.tool_calls = []; done_msg.content = "done"
+        tool_msg = MagicMock()
+        tool_msg.tool_calls = [tc]
+        tool_msg.content = None
+        done_msg = MagicMock()
+        done_msg.tool_calls = []
+        done_msg.content = "done"
         agent.model = MagicMock()
         agent.model.call = AsyncMock(side_effect=[tool_msg, done_msg])
         agent.sandbox.exec = AsyncMock(return_value={"stdout": "hi", "stderr": "", "exit_code": 0})
@@ -347,15 +365,20 @@ class TestComputerAgentLoop:
 # model client
 # ---------------------------------------------------------------------------
 
+
 class TestToolCallingModel:
     @pytest.mark.asyncio
     async def test_raises_model_error_on_server_failure(self):
+        from openai import InternalServerError
+
         from computer_module.model import ToolCallingModel
         from model_module.errors import ModelError
-        from openai import InternalServerError
+
         model = ToolCallingModel()
 
-        mock_resp = MagicMock(); mock_resp.status_code = 500; mock_resp.headers = {}
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_resp.headers = {}
         err = InternalServerError("fail", response=mock_resp, body=None)
 
         with patch("computer_module.model.AsyncOpenAI") as mock_cls:
@@ -365,14 +388,23 @@ class TestToolCallingModel:
             with pytest.raises(ModelError) as exc:
                 await model.call(
                     [{"role": "user", "content": "hi"}],
-                    [{"type": "function", "function": {"name": "t", "description": "d",
-                      "parameters": {"type": "object", "properties": {}}}}]
+                    [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "t",
+                                "description": "d",
+                                "parameters": {"type": "object", "properties": {}},
+                            },
+                        }
+                    ],
                 )
             assert exc.value.retryable is True
 
     @pytest.mark.asyncio
     async def test_returns_message_on_success(self):
         from computer_module.model import ToolCallingModel
+
         model = ToolCallingModel()
         mock_msg = MagicMock()
         mock_msg.tool_calls = []
@@ -392,14 +424,17 @@ class TestToolCallingModel:
 # store -- unit tests (no DB; mock psycopg2)
 # ---------------------------------------------------------------------------
 
+
 class TestComputerStore:
     def test_create_returns_uuid(self):
         from computer_module.store import create_computer_task
+
         mock_conn = MagicMock()
         mock_cur = MagicMock()
         mock_cur.__enter__ = MagicMock(return_value=mock_cur)
         mock_cur.__exit__ = MagicMock(return_value=False)
         import uuid
+
         mock_cur.fetchone.return_value = (uuid.UUID("12345678-1234-5678-1234-567812345678"),)
         mock_conn.cursor.return_value = mock_cur
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
@@ -410,6 +445,7 @@ class TestComputerStore:
 
     def test_get_returns_none_for_wrong_user(self):
         from computer_module.store import get_computer_task
+
         mock_conn = MagicMock()
         mock_cur = MagicMock()
         mock_cur.__enter__ = MagicMock(return_value=mock_cur)
@@ -426,6 +462,7 @@ class TestComputerStore:
         import uuid
 
         from computer_module.store import create_computer_task
+
         mock_conn = MagicMock()
         mock_cur = MagicMock()
         mock_cur.__enter__ = MagicMock(return_value=mock_cur)
@@ -442,6 +479,7 @@ class TestComputerStore:
     def test_get_filters_by_agent_kind(self):
         """get_computer_task scopes to agent_kind='computer' (not just task_id/user)."""
         from computer_module.store import get_computer_task
+
         mock_conn = MagicMock()
         mock_cur = MagicMock()
         mock_cur.__enter__ = MagicMock(return_value=mock_cur)
@@ -458,6 +496,7 @@ class TestComputerStore:
     def test_set_completed_writes_outputs_to_payload(self):
         """set_computer_status(completed) routes through mark_task_completed with outputs."""
         from computer_module import store
+
         with patch.object(store, "mark_task_completed") as mock_done:
             store.set_computer_status("t", "completed", summary="ok", outputs=["/a.txt"])
         mock_done.assert_called_once_with("t", "ok", ["/a.txt"])
@@ -467,13 +506,16 @@ class TestComputerStore:
 # router -- endpoints (mock sandbox + store)
 # ---------------------------------------------------------------------------
 
+
 class TestComputerRouter:
     @pytest.fixture
     def client(self):
-        from fastapi.testclient import TestClient
         from fastapi import FastAPI
-        from computer_module.computer_router import router
+        from fastapi.testclient import TestClient
+
         from base_module.jwt_utils import issue_token
+        from computer_module.computer_router import router
+
         app = FastAPI()
         app.include_router(router)
         return TestClient(app), issue_token("test-user-id", "testuser")
@@ -483,8 +525,7 @@ class TestComputerRouter:
         fake_entries = [{"name": "hello.py", "is_dir": False, "size": 10}]
         with patch("computer_module.computer_router.sandbox_manager") as mock_sbx:
             mock_sbx.list_dir = AsyncMock(return_value=fake_entries)
-            r = tc.get("/computer/files?path=/home/user",
-                       headers={"Authorization": f"Bearer {token}"})
+            r = tc.get("/computer/files?path=/home/user", headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 200
         assert r.json()["entries"][0]["name"] == "hello.py"
 
@@ -492,8 +533,7 @@ class TestComputerRouter:
         tc, token = client
         with patch("computer_module.computer_router.sandbox_manager") as mock_sbx:
             mock_sbx.read_file = AsyncMock(return_value="print('hello')")
-            r = tc.get("/computer/file?path=/home/user/hi.py",
-                       headers={"Authorization": f"Bearer {token}"})
+            r = tc.get("/computer/file?path=/home/user/hi.py", headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 200
         assert r.json()["content"] == "print('hello')"
         assert r.json()["truncated"] is False
@@ -503,8 +543,7 @@ class TestComputerRouter:
         big = "x" * 60_000
         with patch("computer_module.computer_router.sandbox_manager") as mock_sbx:
             mock_sbx.read_file = AsyncMock(return_value=big)
-            r = tc.get("/computer/file?path=/home/user/big.py",
-                       headers={"Authorization": f"Bearer {token}"})
+            r = tc.get("/computer/file?path=/home/user/big.py", headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 200
         assert r.json()["truncated"] is True
         assert len(r.json()["content"]) == 50_000
@@ -512,14 +551,12 @@ class TestComputerRouter:
     def test_get_task_returns_404_for_wrong_user(self, client):
         tc, token = client
         with patch("computer_module.computer_router.get_computer_task", return_value=None):
-            r = tc.get("/computer/tasks/fake-task-id",
-                       headers={"Authorization": f"Bearer {token}"})
+            r = tc.get("/computer/tasks/fake-task-id", headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 404
 
     def test_list_tasks_returns_empty(self, client):
         tc, token = client
         with patch("computer_module.computer_router.list_computer_tasks", return_value=[]):
-            r = tc.get("/computer/tasks",
-                       headers={"Authorization": f"Bearer {token}"})
+            r = tc.get("/computer/tasks", headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 200
         assert r.json()["tasks"] == []

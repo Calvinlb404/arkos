@@ -10,7 +10,6 @@ raised with a model-actionable field-level summary — never the raw content.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, TypeVar
 
@@ -120,6 +119,7 @@ def parse_llm_json(content: str | None, model: type[T]) -> T:
     # Step 2: repair structural issues
     try:
         from json_repair import repair_json  # type: ignore[import]
+
         repaired: Any = repair_json(extracted, return_objects=False)
         if not isinstance(repaired, str):
             repaired = extracted

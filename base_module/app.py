@@ -6,8 +6,6 @@ import time
 import uuid
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
-
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,21 +15,23 @@ from fastapi.staticfiles import StaticFiles
 # Standard boilerplate for module imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from agent_module.agent import Agent
-from base_module.browser_routes import router as browser_router
-from base_module.jwt_utils import CurrentUser, assert_secure_secret
-from base_module.task_store import _user_uuid
-from base_module.tasks import router as tasks_router
-from base_module.users import router as users_router
-from computer_module.computer_router import router as computer_router
-from config_module.loader import config
-from memory_module.memory import Memory
-from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage
-from state_module.agent_buddy.routers import ROUTERS as BUDDY_ROUTERS
-from state_module.core.state_handler import StateHandler
-from tool_module.browser_tool import register_browser_tool
-from tool_module.smithery import AuthRequiredError, SmitheryError
-from tool_module.tool_call import MCPToolManager
+from agent_module.agent import Agent  # noqa: E402
+from base_module.browser_routes import router as browser_router  # noqa: E402
+from base_module.jwt_utils import CurrentUser, assert_secure_secret  # noqa: E402
+from base_module.task_store import _user_uuid  # noqa: E402
+from base_module.tasks import router as tasks_router  # noqa: E402
+from base_module.users import router as users_router  # noqa: E402
+from computer_module.computer_router import router as computer_router  # noqa: E402
+from config_module.loader import config  # noqa: E402
+from memory_module.memory import Memory  # noqa: E402
+from model_module.ArkModelNew import AIMessage, ArkModelLink, SystemMessage, UserMessage  # noqa: E402
+from state_module.agent_buddy.routers import ROUTERS as BUDDY_ROUTERS  # noqa: E402
+from state_module.core.state_handler import StateHandler  # noqa: E402
+from tool_module.browser_tool import register_browser_tool  # noqa: E402
+from tool_module.smithery import AuthRequiredError  # noqa: E402
+from tool_module.tool_call import MCPToolManager  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="ArkOS Agent API", version="1.0.0")
 
@@ -132,10 +132,7 @@ def _make_agent(user_id: str, session_id: str) -> Agent:
             user_tools[server_name] = packed
 
         # Deferred = requires_auth services not yet in user_connected.
-        deferred = [
-            svc for svc in _list_deferred_services()
-            if svc["service"] not in user_connected
-        ]
+        deferred = [svc for svc in _list_deferred_services() if svc["service"] not in user_connected]
 
         base_system_prompt = (config.get("app.system_prompt") or "").strip()
         tool_prompt = format_tools_for_system_prompt(user_tools, deferred=deferred)
@@ -277,7 +274,9 @@ async def startup():
 
         logger.info(
             "[ark] MCP init: %d shared server(s) connected (%d tool(s)); %d per-user service(s) deferred",
-            len(shared_servers), shared_tools, len(deferred),
+            len(shared_servers),
+            shared_tools,
+            len(deferred),
         )
         if shared_servers:
             logger.info("[ark]   shared: %s", ", ".join(shared_servers))
@@ -424,9 +423,7 @@ async def disconnect_service(service: str, current: dict = CurrentUser):
         (tool_manager._pending.get(user_id) or {}).pop(service, None)
         user_reg = tool_manager._user_tool_registry.get(user_id)
         if user_reg:
-            tool_manager._user_tool_registry[user_id] = {
-                t: s for t, s in user_reg.items() if s != service
-            }
+            tool_manager._user_tool_registry[user_id] = {t: s for t, s in user_reg.items() if s != service}
 
     # No global refresh: the next chat builds this user's prompt live in _make_agent.
     return JSONResponse(content={"service": service, "status": "disconnected"})
@@ -459,6 +456,7 @@ async def oauth_callback(service: str, request: Request):
         import asyncio as _asyncio
 
         import aiohttp
+
         async with aiohttp.ClientSession() as session:
             # Retry a couple of times: Smithery's token may not be ready the
             # instant the OAuth redirect fires, so a single attempt can come
@@ -521,8 +519,7 @@ async def health_check():
 
     # Check SGLang and TEI with async HTTP so we don't block the event loop.
     async with httpx.AsyncClient(timeout=2.0) as client:
-        for name, url in [("sglang", "http://localhost:30000/v1/models"),
-                          ("tei", "http://localhost:4444/health")]:
+        for name, url in [("sglang", "http://localhost:30000/v1/models"), ("tei", "http://localhost:4444/health")]:
             try:
                 resp = await client.get(url)
                 services[name] = "running" if resp.status_code == 200 else "error"

@@ -7,12 +7,18 @@ Live test of Tasks 8+9 HTTP endpoints:
   GET  /computer/files     filesystem
   GET  /computer/file      read file
 """
-import asyncio, httpx, time, json
+
+import asyncio
+import json
+
+import httpx
 from dotenv import load_dotenv
+
 load_dotenv(".env")
 
 # Get a demo token from /auth/demo-login
 BASE = "http://localhost:1114"
+
 
 async def main():
     async with httpx.AsyncClient(base_url=BASE, timeout=30) as client:
@@ -24,15 +30,18 @@ async def main():
 
         # --- dispatch ---
         print("\n--- POST /computer/tasks ---")
-        r = await client.post("/computer/tasks",
+        r = await client.post(
+            "/computer/tasks",
             json={"prompt": "write /home/user/api_test.py with: print('api endpoint works'), then run it"},
-            headers=headers)
+            headers=headers,
+        )
         print(f"status: {r.status_code}")
         body = r.json()
         print(f"body: {json.dumps(body, indent=2)}")
         task_id = body.get("task_id")
         if not task_id:
-            print("no task_id, aborting"); return
+            print("no task_id, aborting")
+            return
 
         # --- wait for completion by polling ---
         print(f"\n--- polling /computer/tasks/{task_id}/events until done ---")
@@ -46,8 +55,10 @@ async def main():
                 last_id = e["event_id"]
                 print(f"  [{e['kind']}] {e['content'][:70]}")
                 if e["kind"] in ("completed", "failed"):
-                    completed = True; break
-            if completed: break
+                    completed = True
+                    break
+            if completed:
+                break
 
         # --- list tasks ---
         print("\n--- GET /computer/tasks ---")
@@ -66,7 +77,8 @@ async def main():
         r = await client.get("/computer/file?path=/home/user/api_test.py", headers=headers)
         data = r.json()
         print(f"status: {r.status_code}")
-        print(f"content: {repr(data.get('content',''))[:100]}")
+        print(f"content: {repr(data.get('content', ''))[:100]}")
         print(f"truncated: {data.get('truncated')}, size: {data.get('size')}")
+
 
 asyncio.run(main())

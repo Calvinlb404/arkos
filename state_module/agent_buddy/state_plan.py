@@ -69,11 +69,11 @@ class StatePlan(State):
             "or parameters. The executor picks the specific tool and the names may "
             "differ from what you expect.\n"
             "    WRONG: \"Use the 'list_emails' tool to retrieve the inbox\"\n"
-            "    RIGHT: \"Retrieve the latest 5 emails from the inbox\"\n"
+            '    RIGHT: "Retrieve the latest 5 emails from the inbox"\n'
             "  - For web/browser tasks you MAY reference the browser as the capability "
             "(it is the only way to act on a URL), but still describe the action, not a "
-            "made-up function signature. RIGHT: \"Open https://example.com and return "
-            "the page title.\"\n"
+            'made-up function signature. RIGHT: "Open https://example.com and return '
+            'the page title."\n'
             "  - Do NOT pre-describe the result. Don't write a step that says "
             "'Title of the page is X' — that's the outcome, not the action.\n"
             "  - Do NOT split one action into multiple steps. One concrete action = one step.\n"
