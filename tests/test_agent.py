@@ -347,3 +347,27 @@ class TestStepOutput:
 
         result = await agent.step([UserMessage(content="hi")])
         assert result.content == "here is your answer"
+
+    @pytest.mark.asyncio
+    async def test_step_stream_error_tolerates_graph_without_agent_reply(self, agent):
+        """An error in a graph lacking 'agent_reply' must not KeyError."""
+        agent.memory.add_memory = AsyncMock()
+        agent.memory.retrieve_short_memory = AsyncMock(return_value=[])
+        agent.memory.retrieve_long_memory = AsyncMock(return_value=None)
+
+        err = StateOutput(content="boom", completion_signal="error", error_detail="kaboom")
+        state = MagicMock(is_terminal=False)
+        state.name = "executor"
+        state.run = AsyncMock(return_value=err)
+
+        agent.current_state = state
+        # Executor-like graph: no 'agent_reply'. The unguarded hop calls
+        # get_state("agent_reply") (KeyError below); the guarded one skips it.
+        agent.flow.states = {"executor": state}
+        agent.flow.get_state.side_effect = KeyError("agent_reply")
+        agent.flow.get_initial_state.return_value = state
+
+        events = [e async for e in agent.step_stream([UserMessage(content="hi")])]
+        text = "".join(e.get("text", "") for e in events if e.get("type") == "content")
+        assert "boom" in text
+        assert agent.terminal_reason == TerminalReason.model_error
