@@ -316,3 +316,34 @@ class TestContextBudgeting:
 class TestMaxIter:
     def test_max_iter_constant(self):
         assert MAX_ITER == 10
+
+
+class TestStepOutput:
+    @pytest.mark.asyncio
+    async def test_step_keeps_reply_when_turn_ends_on_empty_state(self, agent):
+        """A reply followed by a terminal empty state must still be returned."""
+        agent.memory.add_memory = AsyncMock()
+        agent.memory.retrieve_short_memory = AsyncMock(return_value=[])
+        agent.memory.retrieve_long_memory = AsyncMock(return_value=None)
+
+        reply = StateOutput(content="here is your answer", completion_signal="complete")
+        empty = StateOutput(content="", completion_signal="needs_input")
+
+        state_reply = MagicMock(is_terminal=False)
+        state_reply.name = "agent_reply"
+        state_reply.check_transition_ready.return_value = True
+        state_reply.run = AsyncMock(return_value=reply)
+
+        state_wait = MagicMock(is_terminal=True)
+        state_wait.name = "ask_user"
+        state_wait.check_transition_ready.return_value = True
+        state_wait.run = AsyncMock(return_value=empty)
+
+        agent.current_state = state_reply
+        agent.flow.get_router.return_value = None
+        agent.flow.get_transitions.return_value = {"tt": ["ask_user"], "td": [("ask_user", "wait")]}
+        agent.flow.get_state.return_value = state_wait
+        agent.flow.get_initial_state.return_value = state_reply
+
+        result = await agent.step([UserMessage(content="hi")])
+        assert result.content == "here is your answer"
