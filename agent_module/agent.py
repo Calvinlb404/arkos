@@ -497,7 +497,11 @@ class Agent:
                         yield {"type": "content", "text": char}
 
             if update and update.completion_signal == "error" and not self.current_state.is_terminal:
-                self.current_state = self.flow.get_state("agent_reply")
+                # Mirror step(): only hop to the reply state when this graph has
+                # one. The executor graph has no "agent_reply"; guarding avoids a
+                # KeyError and lets it fall through to model_error.
+                if "agent_reply" in self.flow.states:
+                    self.current_state = self.flow.get_state("agent_reply")
                 self.terminal_reason = TerminalReason.model_error
                 break
 
