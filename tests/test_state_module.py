@@ -11,6 +11,8 @@ from model_module.errors import OutputValidationError
 from state_module.agent_buddy.state_ai import ReasonedOutput, StateAI
 from state_module.agent_buddy.state_tool import StateTool
 from state_module.agent_buddy.state_user import StateUser
+from state_module.agent_executor.routers import use_tool_router
+from state_module.agent_executor.state_tool import StateExecutorTool
 from state_module.core.base_state import StateOutput
 from state_module.core.state import State
 from state_module.core.state_registry import STATE_REGISTRY, register_state
@@ -363,6 +365,52 @@ class TestStateRegistry:
             @register_state
             class BadState:
                 pass
+
+
+# --- executor StateExecutorTool ---
+
+
+class TestStateExecutorTool:
+    @pytest.mark.asyncio
+    async def test_tool_error_asks_human(self):
+        """A non-auth tool failure routes to ask_human instead of killing the task."""
+        st = StateExecutorTool("use_tool", {})
+        mock_agent = MagicMock()
+        mock_agent.task_id = None
+        mock_agent.current_user_id = "u1"
+        mock_agent.step_idx = 0
+        mock_agent.pending_tool = {"tool_name": "search", "tool_args": {}}
+        mock_agent.tool_manager.call_tool = AsyncMock(side_effect=RuntimeError("network down"))
+
+        result = await st.run([], mock_agent)
+
+        assert result.completion_signal == "error"
+        assert result.structured_data["route"] == "ask"
+        assert mock_agent.pending_ask["kind"] == "text"
+        assert "search" in mock_agent.pending_ask["prompt"]
+        # The failed step is not advanced past; the human decides next.
+        assert mock_agent.step_idx == 0
+
+
+# --- executor use_tool_router ---
+
+
+class TestUseToolRouter:
+    def test_ask_signal_routes_to_ask_human(self):
+        out = StateOutput(
+            content="boom",
+            completion_signal="error",
+            structured_data={"route": "ask"},
+        )
+        assert use_tool_router(out) == "ask_human"
+
+    def test_other_signals_route_to_executor(self):
+        out = StateOutput(
+            content="ok",
+            completion_signal="complete",
+            structured_data={"route": "continue"},
+        )
+        assert use_tool_router(out) == "executor"
 
 
 # --- StateHandler ---
