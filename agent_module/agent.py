@@ -389,9 +389,15 @@ class Agent:
 
             if update:
                 assert isinstance(update, StateOutput), "State output was not a StateOutput instance"
-                self.last_state_output = update
                 if update.content:
+                    self.last_state_output = update
                     await self.add_context([AIMessage(content=update.content)])
+                elif self.last_state_output is None:
+                    # A terminal hand-back state (e.g. ask_user) returns empty
+                    # content; don't let it clobber a real reply produced
+                    # earlier this turn. Keep an empty output only as a last
+                    # resort when nothing else was produced.
+                    self.last_state_output = update
 
             if update and update.completion_signal == "error" and not self.current_state.is_terminal:
                 # Route errors to the reply state when it exists (buddy graph).
@@ -489,7 +495,11 @@ class Agent:
                         yield {"type": "content", "text": char}
 
             if update and update.completion_signal == "error" and not self.current_state.is_terminal:
-                self.current_state = self.flow.get_state("agent_reply")
+                # Mirror step(): only hop to the reply state when this graph has
+                # one. The executor graph has no "agent_reply"; guarding avoids a
+                # KeyError and lets it fall through to model_error.
+                if "agent_reply" in self.flow.states:
+                    self.current_state = self.flow.get_state("agent_reply")
                 self.terminal_reason = TerminalReason.model_error
                 break
 

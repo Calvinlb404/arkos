@@ -16,7 +16,7 @@ states:
     description: "executes the tool chosen for the current plan step"
     type: executor_tool
     transition:
-      next: [executor]
+      next: [executor, ask_human]
 
   ask_human:
     description: "pauses the subagent and asks the human a binary or text question"
