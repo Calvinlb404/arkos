@@ -442,6 +442,7 @@ function openSettings() {
   document.getElementById('settingsBackend').textContent = CONFIG.backend;
   settingsModal.classList.add('open');
   refreshConnections();
+  loadSlackUserId();
 }
 function closeSettings() {
   settingsModal.classList.remove('open');
@@ -580,6 +581,56 @@ connList.addEventListener('click', (e) => {
   const discBtn = e.target.closest('[data-disconnect]');
   if (discBtn) {
     disconnectService(discBtn.getAttribute('data-disconnect'));
+  }
+});
+
+// ---------- slack member id ----------
+async function loadSlackUserId() {
+  try {
+    const r = await fetch(CONFIG.backend + '/auth/me', { headers: authHeaders() });
+    if (!r.ok) return;
+    const d = await r.json();
+    const input = document.getElementById('slackUserIdInput');
+    const statusEl = document.getElementById('slackStatus');
+    if (d.slack_user_id) {
+      input.value = d.slack_user_id;
+      statusEl.textContent = 'connected';
+      statusEl.className = 'status ok';
+    } else {
+      statusEl.textContent = 'not set';
+      statusEl.className = 'status';
+    }
+  } catch (_) {}
+}
+
+document.getElementById('slackSaveBtn').addEventListener('click', async () => {
+  const input = document.getElementById('slackUserIdInput');
+  const statusEl = document.getElementById('slackStatus');
+  const btn = document.getElementById('slackSaveBtn');
+  const val = input.value.trim();
+  if (!val) return;
+  btn.disabled = true;
+  btn.textContent = 'saving...';
+  try {
+    const r = await fetch(CONFIG.backend + '/auth/slack-connect', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ slack_user_id: val }),
+    });
+    if (r.ok) {
+      statusEl.textContent = 'connected';
+      statusEl.className = 'status ok';
+    } else {
+      const e = await r.json().catch(() => ({}));
+      statusEl.textContent = e.detail || 'error';
+      statusEl.className = 'status err';
+    }
+  } catch (_) {
+    statusEl.textContent = 'error';
+    statusEl.className = 'status err';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'save';
   }
 });
 
@@ -761,12 +812,57 @@ document.getElementById('loginUser').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') document.getElementById('loginBtn').click();
 });
 
+// ---------- live browser screencast pane ----------
+// One persistent EventSource per user. EventSource cannot send custom headers,
+// so the user id rides as a query param — matches the backend's fallback.
+let _browserStreamSource = null;
+let _browserPaneHideTimer = null;
+
+function openBrowserStream() {
+  if (!CONFIG.userId) return;
+  if (_browserStreamSource) {
+    try { _browserStreamSource.close(); } catch {}
+  }
+  const url = `${CONFIG.backend}/v1/browser/stream?user_id=${encodeURIComponent(CONFIG.userId)}`;
+  const es = new EventSource(url);
+  _browserStreamSource = es;
+
+  const pane = document.getElementById('browserPane');
+  const img = document.getElementById('browserPaneFrame');
+
+  es.onmessage = (e) => {
+    let evt;
+    try { evt = JSON.parse(e.data); } catch { return; }
+    if (evt.type === 'started') {
+      if (_browserPaneHideTimer) { clearTimeout(_browserPaneHideTimer); _browserPaneHideTimer = null; }
+      pane.classList.add('live');
+      pane.setAttribute('aria-hidden', 'false');
+      img.src = '';
+    } else if (evt.type === 'frame' && evt.jpeg_b64) {
+      pane.classList.add('live');
+      img.src = `data:image/jpeg;base64,${evt.jpeg_b64}`;
+    } else if (evt.type === 'ended') {
+      // Linger briefly so the user sees the final frame.
+      if (_browserPaneHideTimer) clearTimeout(_browserPaneHideTimer);
+      _browserPaneHideTimer = setTimeout(() => {
+        pane.classList.remove('live');
+        pane.setAttribute('aria-hidden', 'true');
+        img.src = '';
+      }, 2000);
+    }
+  };
+  es.onerror = () => {
+    // EventSource auto-reconnects; nothing to do beyond logging in dev.
+  };
+}
+
 // boot
 (async () => {
   checkHealth();
   setInterval(checkHealth, 15000);
   const ok = await ensureAuthed();
   if (ok) {
+    openBrowserStream();
     await refreshTasks();
     setInterval(refreshTasks, 6000);
   }

@@ -128,6 +128,20 @@ class ConfigLoader:
 
         return value
 
+    def validate_required(self, required_keys: list[str]) -> None:
+        """
+        Raise RuntimeError at startup if any required config key is missing or None.
+
+        Calling this early turns cryptic downstream None errors into a clear
+        message that names the missing key before the server accepts any traffic.
+
+        Args:
+            required_keys: Dot-notation paths that must be present and non-None.
+        """
+        missing = [k for k in required_keys if self.get(k) is None]
+        if missing:
+            raise RuntimeError(f"Missing required config keys (check config.yaml and .env): {missing}")
+
     def reload(self) -> dict[str, Any]:
         """Force reload config from disk (useful for testing)."""
         self._config = None

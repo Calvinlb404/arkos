@@ -36,6 +36,11 @@ class LoginResponse(BaseModel):
 class MeResponse(BaseModel):
     user_id: str
     username: str
+    slack_user_id: str | None = None
+
+
+class SlackConnectRequest(BaseModel):
+    slack_user_id: str = Field(..., pattern=r"^U[A-Z0-9]{8,}$")
 
 
 def _connect():
@@ -86,7 +91,43 @@ async def demo_login(req: DemoLoginRequest) -> LoginResponse:
     return LoginResponse(token=token, user_id=user_id, username=uname)
 
 
+def _get_slack_user_id(user_id: str) -> str | None:
+    conn = _connect()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT slack_user_id FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+            return row["slack_user_id"] if row else None
+    finally:
+        conn.close()
+
+
 @router.get("/me", response_model=MeResponse)
 async def me(current: dict[str, Any] = CurrentUser) -> MeResponse:
     """GET /auth/me. Returns the authenticated user from the Bearer token."""
-    return MeResponse(user_id=current["user_id"], username=current["username"])
+    slack_user_id = _get_slack_user_id(current["user_id"])
+    return MeResponse(user_id=current["user_id"], username=current["username"], slack_user_id=slack_user_id)
+
+
+@router.post("/slack-connect", status_code=204)
+async def slack_connect(
+    req: SlackConnectRequest,
+    current: dict[str, Any] = CurrentUser,
+) -> None:
+    """
+    POST /auth/slack-connect
+    Body: {"slack_user_id": "U012AB3CD"}
+    Links the calling user's ARKOS account to their Slack member ID for task notifications.
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET slack_user_id = %s WHERE id = %s",
+                (req.slack_user_id, current["user_id"]),
+            )
+        conn.commit()
+    except psycopg2.Error as e:
+        raise HTTPException(500, f"db error: {e}") from e
+    finally:
+        conn.close()

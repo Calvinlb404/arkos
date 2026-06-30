@@ -21,11 +21,18 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import aiohttp
 
+LocalToolHandler = Callable[[dict[str, Any], str | None], Awaitable[Any]]
+
 logger = logging.getLogger(__name__)
+
+# Network timeout for all Smithery HTTP calls. A hung upstream must not
+# block the agent indefinitely; 30s total / 10s connect is generous but bounded.
+_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10)
 
 
 # ---------------------------------------------------------------------------
@@ -132,11 +139,39 @@ class SmitheryClient:
             body["headers"] = headers
 
         logger.debug("smithery PUT %s", url)
-        async with session.put(url, json=body, headers=self._headers()) as resp:
+        async with session.put(url, json=body, headers=self._headers(), timeout=_HTTP_TIMEOUT) as resp:
             text = await resp.text()
+            if resp.status == 401:
+                # 401 means the user must complete an OAuth / setup flow, not a
+                # transient server error. Raise AuthRequiredError so the caller
+                # can surface a connect-prompt rather than treating this as a blip.
+                raise AuthRequiredError(
+                    service=connection_id,
+                    user_id=None,
+                    message=f"Smithery auth required for {connection_id}: {text}",
+                )
             if resp.status >= 400:
                 raise SmitheryError(f"upsert_connection {resp.status}: {text}")
             return await resp.json() if text else {}
+
+    async def delete_connection(
+        self,
+        session: aiohttp.ClientSession,
+        connection_id: str,
+    ) -> None:
+        """
+        DELETE /connect/{namespace}/{connection_id}
+
+        Removes the connection from Smithery so a subsequent upsert starts a
+        fresh OAuth flow. Safe to call even if the connection doesn't exist
+        (404 is silently ignored).
+        """
+        url = f"{self.base_url}/connect/{self.namespace}/{connection_id}"
+        logger.debug("smithery DELETE %s", url)
+        async with session.delete(url, headers=self._headers(), timeout=_HTTP_TIMEOUT) as resp:
+            if resp.status not in (200, 204, 404):
+                text = await resp.text()
+                logger.warning("smithery DELETE %s returned %s: %s", url, resp.status, text[:200])
 
     async def jsonrpc(
         self,
@@ -162,8 +197,14 @@ class SmitheryClient:
         headers["Accept"] = "application/json, text/event-stream"
 
         logger.debug("smithery POST %s method=%s", url, method)
-        async with session.post(url, json=rpc_body, headers=headers) as resp:
+        async with session.post(url, json=rpc_body, headers=headers, timeout=_HTTP_TIMEOUT) as resp:
             text = await resp.text()
+            if resp.status == 401:
+                raise AuthRequiredError(
+                    service=connection_id,
+                    user_id=None,
+                    message=f"Smithery auth required for {connection_id}: {text}",
+                )
             if resp.status >= 400:
                 raise SmitheryError(f"jsonrpc {method} {resp.status}: {text}")
 
@@ -175,15 +216,21 @@ class SmitheryClient:
                     data = await resp.json(content_type=None)
                 except Exception:
                     # Fallback for SSE format (text/event-stream)
+                    parsed_ok = False
                     for line in text.splitlines():
                         if line.startswith("data: "):
                             try:
-                                parsed = json.loads(line[6:])
-                                if isinstance(parsed, dict) and ("result" in parsed or "error" in parsed):
-                                    data = parsed
+                                candidate = json.loads(line[6:])
+                                if isinstance(candidate, dict) and ("result" in candidate or "error" in candidate):
+                                    data = candidate
+                                    parsed_ok = True
                                     break
                             except json.JSONDecodeError:
                                 pass
+                    if not parsed_ok:
+                        raise SmitheryError(
+                            f"jsonrpc {method}: could not parse response (not JSON or SSE): {text[:200]}"
+                        ) from None
             if "error" in data:
                 err = data["error"] or {}
                 raise SmitheryError(f"{method} rpc error {err.get('code')}: {err.get('message')}")
@@ -253,8 +300,13 @@ class SmitheryManager:
         # kept for back-compat with callers that previously poked at MCPToolManager internals
         self.clients: dict[str, Any] = {}
 
-        # tool_name -> server_name
+        # SHARED tools only: tool_name -> server_name. No-auth servers are the
+        # same for everyone, so a global map is correct here.
         self._tool_registry: dict[str, str] = {}
+
+        # PER-USER tools: user_id -> {tool_name -> server_name}. Keeps one user's
+        # tool routing out of another's (MULTIUSER Task 2 / cross-user fix).
+        self._user_tool_registry: dict[str, dict[str, str]] = {}
 
         # {server_name: [tool_spec, ...]} for no-auth shared servers (seeded at init)
         self._shared_tools: dict[str, list[dict[str, Any]]] = {}
@@ -264,6 +316,27 @@ class SmitheryManager:
 
         # {user_id: {server_name: setup_url}} for connections waiting on OAuth
         self._pending: dict[str, dict[str, str]] = {}
+
+        # Local (non-Smithery) tools registered in-process. Useful for things
+        # like the browser automation tool that talks to Browserless directly
+        # over CDP. Shape: {tool_name: {"spec": dict, "handler": coroutine}}.
+        self._local_tools: dict[str, dict[str, Any]] = {}
+
+    def register_local_tool(
+        self,
+        name: str,
+        description: str,
+        input_schema: dict[str, Any],
+        handler: LocalToolHandler,
+    ) -> None:
+        """Register an in-process tool that bypasses Smithery.
+
+        The handler is awaited as `handler(arguments, user_id)`. The tool shows
+        up under the synthetic server name "local" in `list_all_tools()`.
+        """
+        spec = {"name": name, "description": description, "inputSchema": input_schema}
+        self._local_tools[name] = {"spec": spec, "handler": handler}
+        self._tool_registry[name] = "local"
 
     # ---------- config helpers ----------
 
@@ -367,12 +440,14 @@ class SmitheryManager:
         if state == "connected":
             tools = await self._fetch_tools(session, connection_id)
             self._user_tools.setdefault(user_id, {})[server_name] = tools
+            user_reg = self._user_tool_registry.setdefault(user_id, {})
             for tool in tools:
                 tname = tool.get("name")
                 if tname:
-                    self._tool_registry[tname] = server_name
-            # clear any stale pending auth
-            self._pending.get(user_id, {}).pop(server_name, None)
+                    user_reg[tname] = server_name
+            # clear any stale pending auth (pop from the real nested dict, not a copy)
+            if user_id in self._pending:
+                self._pending[user_id].pop(server_name, None)
             return tools
 
         # needs auth or config
@@ -389,14 +464,14 @@ class SmitheryManager:
             ),
         )
 
-    async def list_all_tools(self) -> dict[str, dict[str, dict[str, Any]]]:
+    async def list_all_tools(self, user_id: str | None = None) -> dict[str, dict[str, dict[str, Any]]]:
         """
         {server_name: {tool_name: tool_spec_with_metadata}}
 
-        Only returns tools from servers that have been successfully connected
-        (either shared at startup, or on-demand per user). Per-user servers are
-        surfaced when the agent calls this while `current_user_id` is pinned
-        and that user has already connected them.
+        Always includes shared (no-auth) tools. Includes per-user tools ONLY for
+        the given `user_id` -- one user never sees another's connected tools.
+        With user_id=None, only shared tools are returned (see UNSAFE_DECISIONS U9
+        for the shared system-prompt path that still calls it without a user).
         """
         out: dict[str, dict[str, dict[str, Any]]] = {}
 
@@ -415,15 +490,32 @@ class SmitheryManager:
         for server_name, tools in self._shared_tools.items():
             pack(server_name, tools)
 
-        # union of per-user tools across all known users
-        for _user_id, by_server in self._user_tools.items():
-            for server_name, tools in by_server.items():
-                out.setdefault(server_name, {})
+        # Locally-registered tools (e.g. browser automation) are shared, not
+        # per-user, so they always appear.
+        if self._local_tools:
+            pack("local", [entry["spec"] for entry in self._local_tools.values()])
+
+        # Per-user tools: only the calling user's. Never union across users.
+        if user_id:
+            for server_name, tools in (self._user_tools.get(user_id) or {}).items():
                 pack(server_name, tools)
 
         return out
 
     # ---------- tool execution ----------
+
+    def _resolve_server(self, tool_name: str, user_id: str | None) -> str | None:
+        """
+        Resolve a tool to its server, scoped to the calling user.
+
+        Checks the user's per-user registry first, then the shared registry.
+        A tool another user connected is never visible here (cross-user fix).
+        """
+        if user_id:
+            user_server = self._user_tool_registry.get(user_id, {}).get(tool_name)
+            if user_server:
+                return user_server
+        return self._tool_registry.get(tool_name)  # shared (no-auth) tools
 
     async def call_tool(
         self,
@@ -431,7 +523,12 @@ class SmitheryManager:
         arguments: dict[str, Any],
         user_id: str | None = None,
     ) -> Any:
-        server_name = self._tool_registry.get(tool_name)
+        # Locally-registered tools (e.g. browser automation) skip Smithery entirely.
+        local = self._local_tools.get(tool_name)
+        if local is not None:
+            return await local["handler"](arguments, user_id)
+
+        server_name = self._resolve_server(tool_name, user_id)
 
         async with aiohttp.ClientSession() as session:
             # If we don't know where this tool lives yet, it might belong to a
@@ -452,10 +549,16 @@ class SmitheryManager:
                     try:
                         await self._ensure_user_server(session, user_id, candidate)
                     except AuthRequiredError:
-                        # this one isn't connected yet, keep scanning
+                        # Not connected yet; keep scanning other servers.
                         continue
-                    if tool_name in self._tool_registry:
-                        server_name = self._tool_registry[tool_name]
+                    except SmitheryError as e:
+                        # Network/server error on this candidate; log and skip
+                        # rather than aborting the whole tool call.
+                        logger.warning("skipping server %s during discovery: %s", candidate, e)
+                        continue
+                    resolved = self._resolve_server(tool_name, user_id)
+                    if resolved:
+                        server_name = resolved
                         break
 
             if not server_name:
@@ -506,10 +609,31 @@ class SmitheryManager:
             if not info["connected"]
         ]
 
+    async def revoke_user_server(self, user_id: str, server_name: str) -> None:
+        """Delete the Smithery connection for this user+server and clear local state.
+
+        Unlike the in-memory-only disconnect, this tells Smithery to remove the
+        stored token so a subsequent connect() starts a fresh OAuth flow instead
+        of hitting a REVOKED/stale token.
+        """
+        connection_id = self._user_conn_id(user_id, server_name)
+        import aiohttp as _aiohttp
+
+        async with _aiohttp.ClientSession() as session:
+            await self.client.delete_connection(session, connection_id)
+
+        # Clear local caches
+        (self._user_tools.get(user_id) or {}).pop(server_name, None)
+        (self._pending.get(user_id) or {}).pop(server_name, None)
+        user_reg = self._user_tool_registry.get(user_id)
+        if user_reg:
+            self._user_tool_registry[user_id] = {t: s for t, s in user_reg.items() if s != server_name}
+
     async def shutdown(self) -> None:
         """No persistent sessions to close (each call opens its own ClientSession)."""
         self.clients.clear()
         self._tool_registry.clear()
+        self._user_tool_registry.clear()
         self._shared_tools.clear()
         self._user_tools.clear()
         self._pending.clear()

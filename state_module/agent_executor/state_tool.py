@@ -76,15 +76,35 @@ class StateExecutorTool(State):
                     "route": "ask",
                 },
             )
+        except Exception as e:
+            # A tool can fail for non-auth reasons (network, bad args, server
+            # error). Don't let one failed step fail the whole task — ask the
+            # human how to proceed and let the executor resume from there.
+            if task_id and log_event:
+                log_event(task_id, "tool_error", str(e)[:500], payload={"tool_name": tool_name})
+            agent.pending_ask = {
+                "kind": "text",
+                "prompt": (
+                    f"The tool `{tool_name}` failed while running this step:\n"
+                    f"{str(e)[:300]}\nHow should I proceed?"
+                ),
+            }
+            return StateOutput(
+                content=f"tool `{tool_name}` failed: {str(e)[:200]}",
+                completion_signal="error",
+                error_detail=str(e),
+                structured_data={"route": "ask"},
+            )
 
         if task_id and log_event:
             log_event(task_id, "tool_result", str(tool_result)[:2000], payload={"tool_name": tool_name})
 
-        # Advance past this plan step and signal the router to loop back to executor.
-        agent.step_idx = getattr(agent, "step_idx", 0) + 1
-
+        # Do NOT advance step_idx here. The executor state reads the tool result
+        # and decides whether to call another tool for the same step (multi-tool
+        # steps like list_calendars → create_event) or advance via action=advance.
+        view = agent.render_tool_result(tool_result)
         return StateOutput(
-            content=f"tool `{tool_name}` -> {str(tool_result)[:400]}",
+            content=f"tool `{tool_name}` -> {view}",
             completion_signal="complete",
-            structured_data={"tool_result": tool_result, "route": "continue"},
+            structured_data={"route": "continue"},
         )

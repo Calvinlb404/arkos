@@ -7,9 +7,12 @@ import pytest
 import yaml
 
 from model_module.ArkModelNew import AIMessage, SystemMessage
+from model_module.errors import OutputValidationError
 from state_module.agent_buddy.state_ai import ReasonedOutput, StateAI
 from state_module.agent_buddy.state_tool import StateTool
 from state_module.agent_buddy.state_user import StateUser
+from state_module.agent_executor.routers import use_tool_router
+from state_module.agent_executor.state_tool import StateExecutorTool
 from state_module.core.base_state import StateOutput
 from state_module.core.state import State
 from state_module.core.state_registry import STATE_REGISTRY, register_state
@@ -157,30 +160,28 @@ class TestStateAI:
         assert result.structured_data["route"] == "reply"
 
     @pytest.mark.asyncio
-    async def test_run_with_invalid_json_falls_back(self):
+    async def test_run_with_invalid_json_raises_for_rerun(self):
         sa = StateAI("reasoning", {})
         mock_agent = MagicMock()
         mock_agent.system_prompt = ""
         mock_agent.call_llm = AsyncMock(return_value=AIMessage(content="not valid json at all"))
 
-        result = await sa.run([], mock_agent)
-        assert isinstance(result, StateOutput)
-        # Soft fallback: surface the raw content, hand back to the user.
-        assert result.content == "not valid json at all"
-        # Router pattern: fallback emits route="ask" signal.
-        assert result.structured_data["route"] == "ask"
+        # Raises so _run_state can rerun with the error fed back; raw content
+        # is quarantined in .raw and never surfaces to the user.
+        with pytest.raises(OutputValidationError) as exc_info:
+            await sa.run([], mock_agent)
+        assert exc_info.value.raw == "not valid json at all"
+        assert exc_info.value.detail != "not valid json at all"
 
     @pytest.mark.asyncio
-    async def test_run_with_none_content(self):
+    async def test_run_with_none_content_raises_for_rerun(self):
         sa = StateAI("reasoning", {})
         mock_agent = MagicMock()
         mock_agent.system_prompt = ""
         mock_agent.call_llm = AsyncMock(return_value=AIMessage(content=None))
 
-        result = await sa.run([], mock_agent)
-        assert isinstance(result, StateOutput)
-        assert "rephrase" in result.content.lower() or "trouble" in result.content.lower()
-        assert result.completion_signal == "error"
+        with pytest.raises(OutputValidationError):
+            await sa.run([], mock_agent)
 
     @pytest.mark.asyncio
     async def test_run_routes_plan_to_workshop(self):
@@ -240,25 +241,29 @@ class TestStateTool:
     async def test_choose_tool(self):
         st = StateTool("t", {})
 
-        # Mock agent with tool_manager
         mock_tool_class = MagicMock()
         mock_tool_class.model_json_schema.return_value = {
             "type": "object",
             "properties": {"tool_name": {"type": "string"}},
         }
+        # parse_structured calls model_validate_json on the class; set up a
+        # return value whose .tool_name.value resolves to the expected string.
+        parsed_mock = MagicMock()
+        parsed_mock.tool_name.value = "search"
+        mock_tool_class.model_validate_json.return_value = parsed_mock
 
         mock_agent = MagicMock()
         mock_agent.create_tool_option_class = AsyncMock(return_value=mock_tool_class)
         mock_agent.call_llm = AsyncMock(
             side_effect=[
-                # First call: choose tool
                 AIMessage(content=json.dumps({"tool_name": "search"})),
-                # Second call: fill args
                 AIMessage(content=json.dumps({"query": "test"})),
             ]
         )
+        mock_agent.current_user_id = "u1"
         mock_agent.tool_manager = MagicMock()
-        mock_agent.tool_manager._tool_registry = {"search": "brave-search"}
+        # Tool resolution is now user-scoped via _resolve_server (shared + per-user).
+        mock_agent.tool_manager._resolve_server = MagicMock(return_value="brave-search")
         mock_agent.tool_manager.list_all_tools = AsyncMock(
             return_value={
                 "brave-search": {
@@ -292,10 +297,11 @@ class TestStateTool:
         )
 
     @pytest.mark.asyncio
-    async def test_run_returns_system_message(self):
+    async def test_run_returns_tool_output(self):
         st = StateTool("t", {})
         mock_agent = MagicMock()
         mock_agent.current_user_id = "user1"
+        mock_agent.render_tool_result.return_value = "42"
 
         with (
             patch.object(st, "_choose_tool", new_callable=AsyncMock) as mock_choose,
@@ -307,28 +313,25 @@ class TestStateTool:
             result = await st.run([], mock_agent)
             assert isinstance(result, StateOutput)
             assert "42" in result.content
+            assert result.completion_signal == "complete"
 
     @pytest.mark.asyncio
-    async def test_run_does_not_truncate_long_tool_result(self):
-        """Regression test for MIT-229: tool results must not be truncated."""
+    async def test_run_no_dead_stash_in_structured_data(self):
+        """tool_result must not appear in structured_data; nothing reads it."""
         st = StateTool("t", {})
         mock_agent = MagicMock()
         mock_agent.current_user_id = "user1"
-
-        long_result = "event_data:" + ("x" * 5000)
+        mock_agent.render_tool_result.return_value = "rendered"
 
         with (
             patch.object(st, "_choose_tool", new_callable=AsyncMock) as mock_choose,
             patch.object(st, "_execute_tool", new_callable=AsyncMock) as mock_exec,
         ):
             mock_choose.return_value = {"tool_name": "list_events", "tool_args": {}}
-            mock_exec.return_value = long_result
+            mock_exec.return_value = "x" * 5000
 
             result = await st.run([], mock_agent)
-            assert isinstance(result, StateOutput)
-            # buddy state_tool returns the raw result; no "tool `name` ->" prefix
-            assert result.content == long_result
-            assert result.structured_data["tool_result"] == long_result
+            assert "tool_result" not in result.structured_data
 
 
 # --- state_registry ---
@@ -362,6 +365,52 @@ class TestStateRegistry:
             @register_state
             class BadState:
                 pass
+
+
+# --- executor StateExecutorTool ---
+
+
+class TestStateExecutorTool:
+    @pytest.mark.asyncio
+    async def test_tool_error_asks_human(self):
+        """A non-auth tool failure routes to ask_human instead of killing the task."""
+        st = StateExecutorTool("use_tool", {})
+        mock_agent = MagicMock()
+        mock_agent.task_id = None
+        mock_agent.current_user_id = "u1"
+        mock_agent.step_idx = 0
+        mock_agent.pending_tool = {"tool_name": "search", "tool_args": {}}
+        mock_agent.tool_manager.call_tool = AsyncMock(side_effect=RuntimeError("network down"))
+
+        result = await st.run([], mock_agent)
+
+        assert result.completion_signal == "error"
+        assert result.structured_data["route"] == "ask"
+        assert mock_agent.pending_ask["kind"] == "text"
+        assert "search" in mock_agent.pending_ask["prompt"]
+        # The failed step is not advanced past; the human decides next.
+        assert mock_agent.step_idx == 0
+
+
+# --- executor use_tool_router ---
+
+
+class TestUseToolRouter:
+    def test_ask_signal_routes_to_ask_human(self):
+        out = StateOutput(
+            content="boom",
+            completion_signal="error",
+            structured_data={"route": "ask"},
+        )
+        assert use_tool_router(out) == "ask_human"
+
+    def test_other_signals_route_to_executor(self):
+        out = StateOutput(
+            content="ok",
+            completion_signal="complete",
+            structured_data={"route": "continue"},
+        )
+        assert use_tool_router(out) == "executor"
 
 
 # --- StateHandler ---

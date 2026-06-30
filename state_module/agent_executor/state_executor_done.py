@@ -35,10 +35,13 @@ class StateExecutorDone(State):
             system = SystemMessage(
                 content=(
                     "You are summarising the results of a completed task for the user.\n"
-                    "Based on the conversation above (which contains tool call results), "
-                    "write a clear, concise summary of what was found or accomplished. "
-                    "Include the actual data returned (e.g. event names, times, titles). "
-                    "Do not say 'the task is complete' — just present the results naturally. "
+                    "CRITICAL: Only report actions that are confirmed by an actual tool_result "
+                    "in the conversation above. Do NOT infer, assume, or describe actions that "
+                    "do not have a corresponding tool_result confirming they succeeded.\n"
+                    "If a plan step has no tool_result proving it ran, say 'Step N was not completed' "
+                    "rather than describing a fabricated outcome.\n"
+                    "Include actual data returned by tools (IDs, names, times). "
+                    "Do not say 'the task is complete' — present only what the tools confirmed. "
                     "Keep it under 200 words."
                 )
             )
@@ -49,10 +52,16 @@ class StateExecutorDone(State):
             if task_id:
                 log_event(task_id, "error", f"summary LLM call failed: {e}")
 
+        # Deterministic success gate (architecture contract #2 -- no LLM here):
+        # step_idx only advances past a step on a non-error 'advance' decision, so
+        # reaching the end means every step genuinely ran. Stopping short means the
+        # executor gave up (e.g. no usable tool), which is a failure, not success.
+        all_steps_done = step_idx >= len(plan_steps)
+
         if not summary:
             summary = (
                 f"Finished all {len(plan_steps)} plan steps."
-                if step_idx >= len(plan_steps)
+                if all_steps_done
                 else f"Stopped at step {step_idx + 1} of {len(plan_steps)}."
             )
 
@@ -61,6 +70,6 @@ class StateExecutorDone(State):
 
         return StateOutput(
             content=summary,
-            completion_signal="complete",
-            structured_data={"summary": summary},
+            completion_signal="complete" if all_steps_done else "incomplete",
+            structured_data={"summary": summary, "all_steps_done": all_steps_done},
         )
